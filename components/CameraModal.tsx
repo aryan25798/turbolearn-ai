@@ -2,10 +2,10 @@
 
 import { useState, useRef, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, X, ScanText, Check, Loader2, RefreshCw, Send, Type, Crop } from 'lucide-react';
+import { Camera, X, ScanText, Check, Loader2, RefreshCw, Send, Type } from 'lucide-react';
 
 interface CameraModalProps {
-  mode: 'capture' | 'scan'; // 'capture' = Image Upload, 'scan' = OCR
+  mode: 'capture' | 'scan';
   onClose: () => void;
   onCapture: (imageSrc: string) => void;
   onScan: (text: string) => void;
@@ -25,8 +25,9 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
   };
 
   const capture = useCallback(() => {
-    // Capture at slightly lower JPEG quality (0.8) to speed up upload without losing text clarity
-    const imageSrc = webcamRef.current?.getScreenshot({ quality: 0.8 });
+    // FIX: Call getScreenshot() without arguments. 
+    // Quality is now handled by the 'screenshotQuality' prop in the JSX below.
+    const imageSrc = webcamRef.current?.getScreenshot();
     if (imageSrc) setImgSrc(imageSrc);
   }, [webcamRef]);
 
@@ -46,7 +47,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
       const response = await fetch('/api/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: imgSrc }), // Send base64 image
+        body: JSON.stringify({ image: imgSrc }),
       });
 
       const data = await response.json();
@@ -138,6 +139,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
                   audio={false}
                   ref={webcamRef}
                   screenshotFormat="image/jpeg"
+                  screenshotQuality={0.8} // ✅ FIX: Quality prop moved here
                   videoConstraints={videoConstraints}
                   className="w-full h-full object-cover"
                 />
@@ -148,8 +150,6 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
 
         {/* Footer Controls */}
         <div className="p-6 bg-[#1e1f20] border-t border-white/5 flex-none">
-          
-          {/* Case A: Lens Mode Active */}
           {scannedText !== null ? (
              <div className="flex gap-4">
                <button 
@@ -165,10 +165,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
                  <Check size={18} /> Use Text
                </button>
              </div>
-          ) : 
-          
-          /* Case B: Camera Active (No Image Yet) */
-          !imgSrc ? (
+          ) : !imgSrc ? (
             <div className="flex justify-center items-center">
               <button 
                 onClick={capture}
@@ -178,7 +175,6 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
               </button>
             </div>
           ) : (
-            /* Case C: Image Captured (Preview) */
             <div className="flex gap-4">
               <button 
                 onClick={() => setImgSrc(null)}

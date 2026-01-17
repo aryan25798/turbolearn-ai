@@ -9,7 +9,7 @@ import {
   Copy, Check, Terminal, Cpu, Sparkles, Plus, MessageSquare, Trash2, LogIn, LogOut, Menu, X, User as UserIcon, 
   Image as ImageIcon, Mic, Volume2, StopCircle, VolumeX, EyeOff, Camera, ScanText
 } from 'lucide-react';
-import { db, auth, googleProvider } from '@/lib/firebase';
+import { db, auth } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc, getDocs, writeBatch 
@@ -127,9 +127,8 @@ export default function Home() {
 
   // 1. AUTH & INIT
   useEffect(() => {
-    // Initial Sidebar State based on screen size (Responsive Update)
     if (typeof window !== 'undefined') {
-        setSidebarOpen(window.innerWidth >= 1024); // Changed to 1024 for better tablet handling
+        setSidebarOpen(window.innerWidth >= 1024);
     }
 
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
@@ -340,15 +339,11 @@ export default function Home() {
     const userMsg: Message = { id: tempId, role: 'user', content: cleanInput, image: image, provider: 'google' };
 
     setGoogleMessages(prev => [...prev, userMsg]);
-    
-    // Updated: Allow Groq to run even with image (using backend context/OCR)
     setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
 
     const promises = [
         addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, image: image, provider: 'google', createdAt: serverTimestamp() }),
         streamAnswer('google', [...googleMessages, userMsg], activeSessionId!, controller.signal, image),
-        
-        // Updated: Send request to Groq + Save Groq Chat
         addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() }),
         streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, image) 
     ];
@@ -364,7 +359,7 @@ export default function Home() {
   return (
     <div className="flex h-[100dvh] bg-[#131314] text-gray-100 font-sans overflow-hidden">
       
-      {/* CAMERA MODAL (Updated) */}
+      {/* CAMERA MODAL */}
       {cameraMode && (
         <CameraModal 
           mode={cameraMode}
@@ -374,7 +369,7 @@ export default function Home() {
         />
       )}
 
-      {/* MOBILE OVERLAY */}
+      {/* MOBILE OVERLAY (Click to close sidebar on mobile) */}
       {sidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/60 z-30 lg:hidden backdrop-blur-sm animate-in fade-in duration-200"
@@ -383,14 +378,17 @@ export default function Home() {
       )}
 
       {/* SIDEBAR */}
+      {/* - Mobile: 'fixed' + 'translate' animation. 
+          - Desktop: 'lg:static' + width transition (shifts main content). 
+      */}
       <aside 
         className={`fixed inset-y-0 left-0 z-40 bg-[#1e1f20] border-r border-white/5 flex flex-col transition-all duration-300 ease-in-out
-          ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full lg:translate-x-0 lg:w-0'} 
+          lg:static lg:z-auto
+          ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:border-none'} 
           overflow-hidden whitespace-nowrap
         `}
       >
         <div className="p-4 flex flex-col gap-4 min-w-[280px]">
-          {/* UPDATED: Header with visible Toggle Button on Desktop */}
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setSidebarOpen(false)} 
@@ -417,7 +415,11 @@ export default function Home() {
                   <MessageSquare size={16} className="flex-none opacity-70" />
                   <span className="truncate w-40">{sess.title}</span>
                 </div>
-                {/* UPDATED: Delete button visible on mobile, hover on desktop */}
+                {/* DELETE BUTTON:
+                   - opacity-100 (Always visible on mobile/touch)
+                   - lg:opacity-0 (Hidden by default on desktop)
+                   - lg:group-hover:opacity-100 (Visible on hover on desktop)
+                */}
                 <button 
                     onClick={(e) => deleteSession(e, sess.id)} 
                     className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-red-400 p-1.5 transition-opacity"
@@ -440,11 +442,12 @@ export default function Home() {
       </aside>
 
       {/* MAIN CONTENT */}
+      {/* flex-1 allows it to fill remaining space. Since Sidebar is static on desktop, this container shrinks/grows automatically */}
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0">
         
         {/* HEADER */}
         <div className="flex-none h-16 flex items-center px-4 z-20 bg-gradient-to-b from-[#131314] via-[#131314]/95 to-transparent backdrop-blur-none">
-          {/* Menu Button - Shows when Sidebar is CLOSED (Desktop) or ALWAYS (Mobile) */}
+          {/* Main Menu Button: Hidden on Desktop if sidebar is OPEN (prevents duplicate buttons) */}
           <button 
             onClick={() => setSidebarOpen(true)} 
             className={`p-2 text-gray-400 hover:bg-[#2c2d2e] hover:text-white rounded-full transition-colors mr-3 active:scale-95 ${sidebarOpen ? 'lg:hidden opacity-0 pointer-events-none' : 'opacity-100'}`}
@@ -526,7 +529,7 @@ export default function Home() {
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={isListening ? "Listening..." : "Ask anything or scan..."}
                 className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3.5 pl-32 pr-28 focus:outline-none focus:bg-[#262729] focus:ring-1 focus:ring-white/10 transition-all text-[15px] border border-[#2c2d2e] shadow-lg ${isListening ? 'border-red-500/50 bg-red-500/5' : ''}`}
-                style={{ fontSize: '16px' }} // Prevents iOS Zoom
+                style={{ fontSize: '16px' }} 
               />
               
               {/* LEFT ACTIONS (Media) */}
