@@ -174,9 +174,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Focus Mode State & Mobile Tab
+  // Focus Mode State
   const [focusedProvider, setFocusedProvider] = useState<'groq' | 'google' | null>(null);
-  const [mobileTab, setMobileTab] = useState<'groq' | 'google'>('google'); // ✅ NEW: Controls Mobile View
 
   // User Role State
   const [userRole, setUserRole] = useState<'user' | 'admin' | null>(null);
@@ -300,17 +299,12 @@ export default function Home() {
   }, [currentSessionId, user, accountStatus]);
 
   useEffect(() => { 
-      // Auto-scroll logic with support for mobile tab switching
-      if ((!focusedProvider || focusedProvider === 'groq') && (mobileTab === 'groq' || window.innerWidth >= 1024)) {
-          groqEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }
-  }, [groqMessages, focusedProvider, mobileTab]);
+      if (!focusedProvider || focusedProvider === 'groq') groqEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [groqMessages, focusedProvider]);
   
   useEffect(() => { 
-      if ((!focusedProvider || focusedProvider === 'google') && (mobileTab === 'google' || window.innerWidth >= 1024)) {
-          googleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }
-  }, [googleMessages, focusedProvider, mobileTab]);
+      if (!focusedProvider || focusedProvider === 'google') googleEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [googleMessages, focusedProvider]);
 
   // --- ACTIONS ---
   const handleLogout = async () => { 
@@ -449,7 +443,7 @@ export default function Home() {
       }
 
       // ✅ FIX: "Fire and Forget" saving. Do NOT await this.
-      // This allows the UI stop button to reset immediately.
+      // This allows the UI stop button to reset immediately in the finally block below.
       addDoc(collection(db, 'chats'), { 
           sessionId: sessId, 
           role: 'assistant', 
@@ -526,12 +520,16 @@ export default function Home() {
         promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
     } else if (localImageBase64 && focusedProvider === 'groq') {
        setFocusedProvider('google');
-       setMobileTab('google'); // Auto-switch to Gemini on mobile if image
     }
 
-    await Promise.all(promises);
-    setLoading(false); // ✅ Now this runs instantly after text finishes
-    abortControllerRef.current = null;
+    try {
+        await Promise.all(promises);
+    } catch (err) {
+        console.error("Stream error", err);
+    } finally {
+        setLoading(false); // ✅ This now runs reliably even if Firestore lags
+        abortControllerRef.current = null;
+    }
   };
 
   // --- RENDER LOGIC ---
@@ -626,6 +624,7 @@ export default function Home() {
       </aside>
 
       {/* MAIN CONTENT */}
+      {/* ✅ FLEX LAYOUT: Solves overlap issues */}
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0 transition-all duration-300">
         
         {/* HEADER */}
@@ -639,24 +638,6 @@ export default function Home() {
             </button>
           </div>
 
-           {/* ✅ NEW: Mobile Tab Switcher */}
-          {!focusedProvider && (
-            <div className="flex lg:hidden bg-[#1e1f20] rounded-full p-1 border border-white/10 absolute left-1/2 transform -translate-x-1/2">
-                <button 
-                    onClick={() => setMobileTab('groq')}
-                    className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mobileTab === 'groq' ? 'bg-[#2c2d2e] text-white shadow-sm' : 'text-gray-500'}`}
-                >
-                    Llama 3.3
-                </button>
-                <button 
-                    onClick={() => setMobileTab('google')}
-                    className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mobileTab === 'google' ? 'bg-[#2c2d2e] text-white shadow-sm' : 'text-gray-500'}`}
-                >
-                    Gemini 2.5
-                </button>
-            </div>
-          )}
-
           <div className="flex items-center">
             {isSpeaking && (
                 <button onClick={stopSpeaking} className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 backdrop-blur-md text-red-400 px-4 py-1.5 rounded-full shadow-lg transition-all animate-pulse text-xs font-bold z-50 pointer-events-auto">
@@ -666,19 +647,16 @@ export default function Home() {
           </div>
         </div>
 
-        {/* CHAT SCROLL AREA */}
-        {/* ✅ FIX: Removed fixed height issues, optimized for full flex height */}
-        <div className="flex-1 overflow-hidden p-3 md:p-6 pb-0 pt-0 flex flex-col">
-          <div className={`h-full w-full max-w-[1800px] mx-auto transition-all duration-300 
-             ${focusedProvider ? 'max-w-4xl' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6'}
+        {/* CHAT SCROLL AREA - Grows to fill remaining space */}
+        <div className="flex-1 min-h-0 overflow-hidden p-2 md:p-4 pb-0 pt-0 flex flex-col relative z-0">
+          <div className={`w-full h-full max-w-[1800px] mx-auto transition-all duration-300 
+             ${focusedProvider ? 'max-w-4xl' : 'flex flex-col lg:grid lg:grid-cols-2 gap-2 lg:gap-6'}
           `}>
             
             {/* GROQ CARD */}
-            {/* ✅ FIX: Mobile Visibility Logic based on Tab */}
             {(!focusedProvider || focusedProvider === 'groq') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl relative overflow-hidden transition-all duration-300
-                ${focusedProvider === 'groq' ? 'h-[calc(100vh-140px)] border-orange-500/30 shadow-[0_0_50px_rgba(249,115,22,0.1)]' : 'h-full'}
-                ${!focusedProvider && mobileTab !== 'groq' ? 'hidden lg:flex' : 'flex'} 
+                ${focusedProvider === 'groq' ? 'h-full border-orange-500/30 shadow-[0_0_50px_rgba(249,115,22,0.1)]' : 'flex-1 min-h-0'} 
               `}>
                 <div className="flex items-center justify-between px-4 py-3 bg-[#1e1f20]/95 backdrop-blur-sm border-b border-[#2c2d2e] sticky top-0 z-10">
                   <div className="flex items-center gap-2">
@@ -694,7 +672,7 @@ export default function Home() {
                     {focusedProvider === 'groq' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
-                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-24 lg:pb-5">
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5">
                   {!currentSessionId && groqMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Cpu size={48} /><span className="text-xs font-medium">Ready</span></div>}
                   {groqMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -713,8 +691,7 @@ export default function Home() {
             {/* GEMINI CARD */}
             {(!focusedProvider || focusedProvider === 'google') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl overflow-hidden transition-all duration-300
-                ${focusedProvider === 'google' ? 'h-[calc(100vh-140px)] border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.1)]' : 'h-full'}
-                ${!focusedProvider && mobileTab !== 'google' ? 'hidden lg:flex' : 'flex'}
+                ${focusedProvider === 'google' ? 'h-full border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.1)]' : 'flex-1 min-h-0'}
               `}>
                 <div className="flex items-center justify-between px-4 py-3 bg-[#1e1f20]/95 backdrop-blur-sm border-b border-[#2c2d2e] sticky top-0 z-10">
                   <div className="flex items-center gap-2">
@@ -730,7 +707,7 @@ export default function Home() {
                     {focusedProvider === 'google' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
-                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-24 lg:pb-5">
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5">
                   {!currentSessionId && googleMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Sparkles size={48} /><span className="text-xs font-medium">Ready</span></div>}
                   {googleMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -749,9 +726,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* INPUT AREA (Fixed Bottom) */}
-        {/* ✅ FIX: Changed to Fixed positioning for better keyboard handling */}
-        <div className="fixed bottom-0 w-full lg:w-[calc(100%-280px)] lg:left-[280px] p-3 md:p-6 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent pb-[calc(env(safe-area-inset-bottom)+12px)] z-20">
+        {/* INPUT AREA - Sticky Footer (Not Fixed) */}
+        {/* ✅ FIX: Removes overlap by being a flex item */}
+        <div className="flex-none w-full p-3 md:p-6 bg-[#131314] z-20 border-t border-white/5">
           <div className={`mx-auto relative transition-all duration-300 ${focusedProvider ? 'max-w-3xl' : 'max-w-4xl'}`}>
             
             {/* Image Preview */}
