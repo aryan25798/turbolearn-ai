@@ -252,6 +252,7 @@ export default function Home() {
         });
         unsubUserRef.current = unsubUser;
 
+        // --- PERSIST CHAT ON REFRESH ---
         const savedSessionId = localStorage.getItem('turboLastSession');
         if (savedSessionId) setCurrentSessionId(savedSessionId);
 
@@ -442,8 +443,7 @@ export default function Home() {
         });
       }
 
-      // ✅ FIX: "Fire and Forget" saving. Do NOT await this.
-      // This allows the UI stop button to reset immediately in the finally block below.
+      // "Fire and Forget" saving
       addDoc(collection(db, 'chats'), { 
           sessionId: sessId, 
           role: 'assistant', 
@@ -503,7 +503,7 @@ export default function Home() {
 
     const promises = [];
 
-    // Save user message (fire and forget for speed)
+    // Save user message
     addDoc(collection(db, 'chats'), { 
         sessionId: activeSessionId, role: 'user', content: cleanInput, image: null, provider: 'google', createdAt: serverTimestamp() 
     });
@@ -527,7 +527,7 @@ export default function Home() {
     } catch (err) {
         console.error("Stream error", err);
     } finally {
-        setLoading(false); // ✅ This now runs reliably even if Firestore lags
+        setLoading(false); 
         abortControllerRef.current = null;
     }
   };
@@ -602,12 +602,13 @@ export default function Home() {
               <div key={sess.id} onClick={() => selectSession(sess.id)}
                 className={`group flex items-center justify-between px-3 py-2 rounded-full cursor-pointer text-sm transition-all border border-transparent ${currentSessionId === sess.id ? 'bg-[#004a77]/40 text-blue-100 font-medium' : 'text-gray-400 hover:bg-[#282a2c] hover:text-gray-200'}`}>
                 <span className="truncate w-44 text-[13px]">{sess.title}</span>
+                {/* ✅ MOBILE FIX: Always visible on mobile (opacity-100), hover on desktop */}
                 <button 
                     onClick={(e) => deleteSession(e, sess.id)} 
-                    className="opacity-0 group-hover:opacity-100 hover:text-red-400 p-1 transition-opacity"
+                    className="text-gray-500 hover:text-red-400 p-2 transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100"
                     title="Delete Chat"
                 >
-                    <Trash2 size={12} />
+                    <Trash2 size={14} />
                 </button>
               </div>
             ))}
@@ -628,7 +629,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0 transition-all duration-300">
         
         {/* HEADER */}
-        <div className="flex-none h-16 flex items-center px-4 z-40 bg-transparent justify-between">
+        <div className="flex-none h-16 flex items-center px-4 z-40 bg-transparent justify-between relative">
           <div className={`flex items-center transition-opacity duration-300 ${sidebarOpen ? 'lg:opacity-0 pointer-events-none' : 'opacity-100'}`}>
              <button 
               onClick={() => setSidebarOpen(true)}
@@ -636,6 +637,11 @@ export default function Home() {
             >
               <Menu size={24} />
             </button>
+          </div>
+
+          {/* ✅ STYLISH TITLE in Empty Header Space */}
+          <div className="absolute left-1/2 transform -translate-x-1/2 font-bold text-lg md:text-2xl tracking-tighter bg-gradient-to-r from-blue-400 via-purple-400 to-orange-400 bg-clip-text text-transparent select-none pointer-events-none">
+            TurboLearn AI
           </div>
 
           <div className="flex items-center">
