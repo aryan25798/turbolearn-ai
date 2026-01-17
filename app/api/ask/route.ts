@@ -131,7 +131,7 @@ RULES:
       system: systemPrompt,
       messages: coreMessages,
       temperature: 0.1, // Low temp ensures accurate, non-hallucinated answers
-      maxTokens: 1024,
+      maxOutputTokens: 1024, // ✅ FIX: Renamed from maxTokens to maxOutputTokens
     });
 
     return result.toTextStreamResponse();
