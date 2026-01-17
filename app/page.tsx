@@ -10,16 +10,16 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import 'katex/dist/katex.min.css'; 
 
 import { 
-  Copy, Check, Terminal, Cpu, Sparkles, Plus, MessageSquare, Trash2, LogIn, LogOut, Menu, X, User as UserIcon, 
-  Image as ImageIcon, Mic, Volume2, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
-  Clock, ShieldAlert, Loader2, Lock, History
+  Copy, Check, Terminal, Cpu, Sparkles, Plus, Trash2, LogOut, Menu, X, User as UserIcon, 
+  Mic, Volume2, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
+  Clock, ShieldAlert, History
 } from 'lucide-react';
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
-  collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc, getDocs, writeBatch, getDoc, setDoc, updateDoc, Unsubscribe, limit
+  collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, doc, getDoc, setDoc, updateDoc, Unsubscribe, limit
 } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { ref, uploadString } from 'firebase/storage';
 import Login from '@/components/Login';
 import CameraModal from '@/components/CameraModal';
 
@@ -104,7 +104,6 @@ const MarkdownRenderer = ({
             : 'text-gray-400 hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 focus:opacity-100 active:opacity-100 mobile-visible'
           }`}
         title={isSpeaking ? "Stop Reading" : "Read Aloud"}
-        aria-label={isSpeaking ? "Stop Reading" : "Read Aloud"}
       >
         {isSpeaking ? <StopCircle size={16} className="animate-pulse" /> : <Volume2 size={16} />}
       </button>
@@ -175,8 +174,9 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Focus Mode State
+  // Focus Mode State & Mobile Tab
   const [focusedProvider, setFocusedProvider] = useState<'groq' | 'google' | null>(null);
+  const [mobileTab, setMobileTab] = useState<'groq' | 'google'>('google'); // ✅ NEW: Controls Mobile View
 
   // User Role State
   const [userRole, setUserRole] = useState<'user' | 'admin' | null>(null);
@@ -202,19 +202,16 @@ export default function Home() {
   const googleEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // ✅ 1. LISTENER REFS: Store unsubscribe functions here to clear them on logout
   const unsubUserRef = useRef<Unsubscribe | null>(null);
   const unsubSessionsRef = useRef<Unsubscribe | null>(null);
 
   // 1. AUTH & INIT
   useEffect(() => {
-    // Gemini-like behavior: Sidebar open on large screens by default
     if (typeof window !== 'undefined') {
-        setSidebarOpen(window.innerWidth >= 1024); // lg breakpoint
+        setSidebarOpen(window.innerWidth >= 1024); 
     }
 
     const unsubAuth = onAuthStateChanged(auth, async (currentUser) => {
-      // ✅ CLEANUP PREVIOUS LISTENERS IMMEDIATELY (Prevents Permission Denied Error)
       if (unsubUserRef.current) { unsubUserRef.current(); unsubUserRef.current = null; }
       if (unsubSessionsRef.current) { unsubSessionsRef.current(); unsubSessionsRef.current = null; }
 
@@ -242,7 +239,6 @@ export default function Home() {
             console.error("Error creating/updating user profile:", err);
         }
 
-        // ✅ User Listener with Ref Storage
         const unsubUser = onSnapshot(userRef, (docSnap) => {
              const data = docSnap.data();
              if (data) {
@@ -260,8 +256,6 @@ export default function Home() {
         const savedSessionId = localStorage.getItem('turboLastSession');
         if (savedSessionId) setCurrentSessionId(savedSessionId);
 
-        // ✅ Sessions Listener with Ref Storage
-        // 🚀 OPTIMIZATION: Limit to 50 sessions to prevent crashes
         const q = query(
             collection(db, 'sessions'), 
             where('userId', '==', currentUser.uid), 
@@ -276,7 +270,6 @@ export default function Home() {
         unsubSessionsRef.current = unsubSessions;
 
       } else {
-        // LOGOUT CLEANUP
         setSessions([]); setGroqMessages([]); setGoogleMessages([]);
         localStorage.removeItem('turboLastSession');
         setUser(null);
@@ -285,7 +278,6 @@ export default function Home() {
       }
     });
 
-    // Cleanup on component unmount
     return () => {
         unsubAuth();
         if (unsubUserRef.current) unsubUserRef.current();
@@ -308,19 +300,22 @@ export default function Home() {
   }, [currentSessionId, user, accountStatus]);
 
   useEffect(() => { 
-      if (!focusedProvider || focusedProvider === 'groq') groqEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
-  }, [groqMessages, focusedProvider]);
+      // Auto-scroll logic with support for mobile tab switching
+      if ((!focusedProvider || focusedProvider === 'groq') && (mobileTab === 'groq' || window.innerWidth >= 1024)) {
+          groqEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+  }, [groqMessages, focusedProvider, mobileTab]);
   
   useEffect(() => { 
-      if (!focusedProvider || focusedProvider === 'google') googleEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
-  }, [googleMessages, focusedProvider]);
+      if ((!focusedProvider || focusedProvider === 'google') && (mobileTab === 'google' || window.innerWidth >= 1024)) {
+          googleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+  }, [googleMessages, focusedProvider, mobileTab]);
 
   // --- ACTIONS ---
   const handleLogout = async () => { 
-      // Manually clear listeners before signing out to prevent permission errors
       if (unsubUserRef.current) { unsubUserRef.current(); unsubUserRef.current = null; }
       if (unsubSessionsRef.current) { unsubSessionsRef.current(); unsubSessionsRef.current = null; }
-      
       await signOut(auth); 
       startNewChat(); 
   };
@@ -332,30 +327,24 @@ export default function Home() {
     setImage(null);
     stopSpeaking();
     setFocusedProvider(null);
-    // Auto-close sidebar on mobile only
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
   const selectSession = (sessId: string) => {
     setCurrentSessionId(sessId);
     localStorage.setItem('turboLastSession', sessId);
-    // Auto-close sidebar on mobile only
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
   const deleteSession = async (e: React.MouseEvent, sessId: string) => {
     e.stopPropagation();
     if (!confirm("Delete this chat from history?")) return;
-    
     if (currentSessionId === sessId) startNewChat();
 
     try {
-      await updateDoc(doc(db, 'sessions', sessId), {
-          deletedByUser: true
-      });
+      await updateDoc(doc(db, 'sessions', sessId), { deletedByUser: true });
     } catch (error) {
       console.error("Error deleting session:", error);
-      alert("Failed to delete chat history.");
     }
   };
 
@@ -403,18 +392,9 @@ export default function Home() {
     const preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Samantha'));
     if (preferredVoice) utterance.voice = preferredVoice;
 
-    utterance.onstart = () => {
-        setIsSpeaking(true);
-        setSpeakingMessageId(msgId);
-    };
-    utterance.onend = () => {
-        setIsSpeaking(false);
-        setSpeakingMessageId(null);
-    };
-    utterance.onerror = () => {
-        setIsSpeaking(false);
-        setSpeakingMessageId(null);
-    };
+    utterance.onstart = () => { setIsSpeaking(true); setSpeakingMessageId(msgId); };
+    utterance.onend = () => { setIsSpeaking(false); setSpeakingMessageId(null); };
+    utterance.onerror = () => { setIsSpeaking(false); setSpeakingMessageId(null); };
     window.speechSynthesis.speak(utterance);
   };
 
@@ -452,6 +432,7 @@ export default function Home() {
       let done = false;
       let fullResponse = '';
       const tempId = 'temp_' + Date.now();
+      
       while (!done) {
         const { value, done: doneReading } = await reader.read();
         done = doneReading;
@@ -466,8 +447,20 @@ export default function Home() {
           return newHistory;
         });
       }
-      await addDoc(collection(db, 'chats'), { sessionId: sessId, role: 'assistant', content: fullResponse, provider, createdAt: serverTimestamp() });
-    } catch (err: any) { if (err.name !== 'AbortError') console.error(err); }
+
+      // ✅ FIX: "Fire and Forget" saving. Do NOT await this.
+      // This allows the UI stop button to reset immediately.
+      addDoc(collection(db, 'chats'), { 
+          sessionId: sessId, 
+          role: 'assistant', 
+          content: fullResponse, 
+          provider, 
+          createdAt: serverTimestamp() 
+      }).catch(e => console.error("Error saving chat:", e));
+
+    } catch (err: any) { 
+        if (err.name !== 'AbortError') console.error(err); 
+    }
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -502,39 +495,27 @@ export default function Home() {
     const tempId = 'temp_user_' + Date.now();
     const userMsg: Message = { id: tempId, role: 'user', content: cleanInput, image: localImageBase64, provider: 'google' };
 
+    // Update Local UI instantly
     if (!focusedProvider || focusedProvider === 'google') setGoogleMessages(prev => [...prev, userMsg]);
-    
     if (!localImageBase64 && (!focusedProvider || focusedProvider === 'groq')) {
         setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
     }
 
-    const promises = [];
-    
-    // 🚀 SPEED FIX: OPTIMISTIC UPLOAD
-    // We start the upload in the background but DO NOT await it.
-    // The chat starts immediately.
+    // Fire and forget image upload
     if (localImageBase64) {
       const storageRef = ref(storage, `chat-images/${user.uid}/${activeSessionId}/${Date.now()}.jpg`);
-      
-      // Fire and forget (Log on error)
-      uploadString(storageRef, localImageBase64, 'data_url')
-        .then(() => console.log("Image uploaded in bg"))
-        .catch(err => console.error("Image upload failed:", err));
+      uploadString(storageRef, localImageBase64, 'data_url').catch(err => console.error("Image upload failed:", err));
     }
 
-    // Note: We save image: null to Firestore for speed. 
-    // The AI receives the base64 directly, so it works instantly.
-    promises.push(addDoc(collection(db, 'chats'), { 
-        sessionId: activeSessionId, 
-        role: 'user', 
-        content: cleanInput, 
-        image: null, // Don't wait for URL
-        provider: 'google', 
-        createdAt: serverTimestamp() 
-    }));
+    const promises = [];
+
+    // Save user message (fire and forget for speed)
+    addDoc(collection(db, 'chats'), { 
+        sessionId: activeSessionId, role: 'user', content: cleanInput, image: null, provider: 'google', createdAt: serverTimestamp() 
+    });
 
     if (!localImageBase64 && !focusedProvider) {
-        promises.push(addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() }));
+        addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() });
     }
 
     if (localImageBase64 || !focusedProvider || focusedProvider === 'google') {
@@ -545,10 +526,11 @@ export default function Home() {
         promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
     } else if (localImageBase64 && focusedProvider === 'groq') {
        setFocusedProvider('google');
+       setMobileTab('google'); // Auto-switch to Gemini on mobile if image
     }
 
     await Promise.all(promises);
-    setLoading(false);
+    setLoading(false); // ✅ Now this runs instantly after text finishes
     abortControllerRef.current = null;
   };
 
@@ -581,7 +563,7 @@ export default function Home() {
         />
       )}
 
-      {/* SIDEBAR - GEMINI STYLE */}
+      {/* SIDEBAR */}
       <aside 
         className={`fixed lg:static inset-y-0 left-0 z-50 flex flex-col bg-[#1e1f20] border-r border-white/5 transition-all duration-300 ease-in-out shadow-2xl
           ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:border-none lg:overflow-hidden'}
@@ -647,8 +629,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0 transition-all duration-300">
         
         {/* HEADER */}
-        <div className="flex-none h-16 flex items-center px-4 z-40 bg-transparent">
-          {/* Menu button only visible when sidebar is closed on desktop OR always on mobile */}
+        <div className="flex-none h-16 flex items-center px-4 z-40 bg-transparent justify-between">
           <div className={`flex items-center transition-opacity duration-300 ${sidebarOpen ? 'lg:opacity-0 pointer-events-none' : 'opacity-100'}`}>
              <button 
               onClick={() => setSidebarOpen(true)}
@@ -658,25 +639,46 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="flex-1 flex justify-center pointer-events-none">
-             {!currentSessionId && groqMessages.length === 0 && <span className="text-base font-medium text-gray-500 tracking-tight opacity-50">TurboLearn AI</span>}
-          </div>
-            
-          {isSpeaking && (
-            <button onClick={stopSpeaking} className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 backdrop-blur-md text-red-400 px-4 py-1.5 rounded-full shadow-lg transition-all animate-pulse text-xs font-bold z-50 pointer-events-auto">
-              <VolumeX size={14} /> <span className="hidden md:inline">Stop</span>
-            </button>
+           {/* ✅ NEW: Mobile Tab Switcher */}
+          {!focusedProvider && (
+            <div className="flex lg:hidden bg-[#1e1f20] rounded-full p-1 border border-white/10 absolute left-1/2 transform -translate-x-1/2">
+                <button 
+                    onClick={() => setMobileTab('groq')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mobileTab === 'groq' ? 'bg-[#2c2d2e] text-white shadow-sm' : 'text-gray-500'}`}
+                >
+                    Llama 3.3
+                </button>
+                <button 
+                    onClick={() => setMobileTab('google')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${mobileTab === 'google' ? 'bg-[#2c2d2e] text-white shadow-sm' : 'text-gray-500'}`}
+                >
+                    Gemini 2.5
+                </button>
+            </div>
           )}
+
+          <div className="flex items-center">
+            {isSpeaking && (
+                <button onClick={stopSpeaking} className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 backdrop-blur-md text-red-400 px-4 py-1.5 rounded-full shadow-lg transition-all animate-pulse text-xs font-bold z-50 pointer-events-auto">
+                <VolumeX size={14} /> <span className="hidden md:inline">Stop</span>
+                </button>
+            )}
+          </div>
         </div>
 
         {/* CHAT SCROLL AREA */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 md:p-6 pb-0 pt-0">
-          <div className={`mx-auto h-full pb-32 md:pb-40 transition-all duration-300 w-full max-w-[1800px] ${focusedProvider ? 'max-w-4xl mx-auto' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6'}`}>
+        {/* ✅ FIX: Removed fixed height issues, optimized for full flex height */}
+        <div className="flex-1 overflow-hidden p-3 md:p-6 pb-0 pt-0 flex flex-col">
+          <div className={`h-full w-full max-w-[1800px] mx-auto transition-all duration-300 
+             ${focusedProvider ? 'max-w-4xl' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6'}
+          `}>
             
             {/* GROQ CARD */}
+            {/* ✅ FIX: Mobile Visibility Logic based on Tab */}
             {(!focusedProvider || focusedProvider === 'groq') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl relative overflow-hidden transition-all duration-300
-                ${focusedProvider === 'groq' ? 'h-[calc(100vh-180px)] border-orange-500/30 shadow-[0_0_50px_rgba(249,115,22,0.1)]' : 'h-[45vh] lg:h-[calc(100vh-180px)]'}
+                ${focusedProvider === 'groq' ? 'h-[calc(100vh-140px)] border-orange-500/30 shadow-[0_0_50px_rgba(249,115,22,0.1)]' : 'h-full'}
+                ${!focusedProvider && mobileTab !== 'groq' ? 'hidden lg:flex' : 'flex'} 
               `}>
                 <div className="flex items-center justify-between px-4 py-3 bg-[#1e1f20]/95 backdrop-blur-sm border-b border-[#2c2d2e] sticky top-0 z-10">
                   <div className="flex items-center gap-2">
@@ -692,7 +694,7 @@ export default function Home() {
                     {focusedProvider === 'groq' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
-                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar">
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-24 lg:pb-5">
                   {!currentSessionId && groqMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Cpu size={48} /><span className="text-xs font-medium">Ready</span></div>}
                   {groqMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -711,7 +713,8 @@ export default function Home() {
             {/* GEMINI CARD */}
             {(!focusedProvider || focusedProvider === 'google') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl overflow-hidden transition-all duration-300
-                ${focusedProvider === 'google' ? 'h-[calc(100vh-180px)] border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.1)]' : 'h-[45vh] lg:h-[calc(100vh-180px)]'}
+                ${focusedProvider === 'google' ? 'h-[calc(100vh-140px)] border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.1)]' : 'h-full'}
+                ${!focusedProvider && mobileTab !== 'google' ? 'hidden lg:flex' : 'flex'}
               `}>
                 <div className="flex items-center justify-between px-4 py-3 bg-[#1e1f20]/95 backdrop-blur-sm border-b border-[#2c2d2e] sticky top-0 z-10">
                   <div className="flex items-center gap-2">
@@ -727,7 +730,7 @@ export default function Home() {
                     {focusedProvider === 'google' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
-                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar">
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-24 lg:pb-5">
                   {!currentSessionId && googleMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Sparkles size={48} /><span className="text-xs font-medium">Ready</span></div>}
                   {googleMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -746,9 +749,10 @@ export default function Home() {
           </div>
         </div>
 
-        {/* INPUT AREA (Fixed Bottom with Glassmorphism) */}
-        <div className="flex-none p-3 md:p-6 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent pb-[calc(env(safe-area-inset-bottom)+12px)] absolute bottom-0 w-full z-20">
-          <div className={`mx-auto relative transition-all duration-300 ${focusedProvider ? 'max-w-3xl' : (sidebarOpen ? 'max-w-4xl' : 'max-w-5xl')}`}>
+        {/* INPUT AREA (Fixed Bottom) */}
+        {/* ✅ FIX: Changed to Fixed positioning for better keyboard handling */}
+        <div className="fixed bottom-0 w-full lg:w-[calc(100%-280px)] lg:left-[280px] p-3 md:p-6 bg-gradient-to-t from-[#131314] via-[#131314] to-transparent pb-[calc(env(safe-area-inset-bottom)+12px)] z-20">
+          <div className={`mx-auto relative transition-all duration-300 ${focusedProvider ? 'max-w-3xl' : 'max-w-4xl'}`}>
             
             {/* Image Preview */}
             {image && (
@@ -765,7 +769,7 @@ export default function Home() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={isListening ? "Listening..." : focusedProvider ? `Talk to ${focusedProvider === 'groq' ? 'Llama' : 'Gemini'}...` : "Ask anything or scan..."}
+                placeholder={isListening ? "Listening..." : focusedProvider ? `Talk to ${focusedProvider === 'groq' ? 'Llama' : 'Gemini'}...` : "Ask anything..."}
                 className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3 md:py-4 pl-12 md:pl-14 pr-20 md:pr-28 
                   focus:outline-none focus:ring-1 focus:ring-white/10 focus:bg-[#2c2d2e]
                   transition-all text-[15px] border border-[#2c2d2e] shadow-lg hover:shadow-xl
@@ -796,9 +800,6 @@ export default function Home() {
                 </button>
               </div>
             </form>
-            <p className="text-center text-[10px] text-gray-600 mt-3 hidden md:block font-medium tracking-wide">
-                {focusedProvider ? `Private Chat with ${focusedProvider === 'groq' ? 'Llama' : 'Gemini'}` : 'TurboLearn AI • Gemini 2.5 Flash • Llama 3.3'}
-            </p>
           </div>
         </div>
       </main>
