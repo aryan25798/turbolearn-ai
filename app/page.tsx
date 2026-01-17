@@ -71,15 +71,28 @@ const CodeBlock = ({ language, code }: { language: string, code: string }) => {
   );
 };
 
-const MarkdownRenderer = ({ content, onSpeak }: { content: string, onSpeak: (text: string) => void }) => {
+// ✅ UPDATED: MarkdownRenderer with Toggle Logic & Mobile Visibility
+const MarkdownRenderer = ({ 
+  content, 
+  msgId, 
+  isSpeaking, 
+  onToggleSpeak 
+}: { 
+  content: string, 
+  msgId: string, 
+  isSpeaking: boolean, 
+  onToggleSpeak: (text: string, id: string) => void 
+}) => {
   return (
     <div className="relative group max-w-full overflow-hidden">
       <button 
-        onClick={() => onSpeak(content)}
-        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 p-1.5 bg-[#383a3c] rounded-full text-gray-400 hover:text-white transition-all shadow-md z-10"
-        title="Read Aloud"
+        onClick={() => onToggleSpeak(content, msgId)}
+        // ✅ Fixed: Removed 'opacity-0 group-hover:opacity-100' to make it visible on mobile/all screens
+        className="absolute -top-2 -right-2 p-1.5 bg-[#383a3c] rounded-full text-gray-400 hover:text-white transition-all shadow-md z-10"
+        title={isSpeaking ? "Stop" : "Read Aloud"}
       >
-        <Volume2 size={12} />
+        {/* ✅ Icon Toggles based on state */}
+        {isSpeaking ? <StopCircle size={14} className="text-red-400" /> : <Volume2 size={14} />}
       </button>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
         code({ node, inline, className, children, ...props }: any) {
@@ -110,6 +123,9 @@ export default function Home() {
   const [image, setImage] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false); 
+  // ✅ New State: Track which message is currently speaking
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+
   const [cameraMode, setCameraMode] = useState<'capture' | 'scan' | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -257,15 +273,39 @@ export default function Home() {
     recognition.start();
   };
 
-  const speakText = (text: string) => {
+  // ✅ UPDATED: speakText now accepts msgId and handles toggle
+  const speakText = (text: string, msgId: string) => {
     window.speechSynthesis.cancel();
+    
+    // Toggle OFF if clicking the active speaker
+    if (isSpeaking && speakingMessageId === msgId) {
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+        return;
+    }
+
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
+    utterance.onstart = () => {
+        setIsSpeaking(true);
+        setSpeakingMessageId(msgId);
+    };
+    utterance.onend = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+    };
+    utterance.onerror = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+    };
     window.speechSynthesis.speak(utterance);
   };
 
-  const stopSpeaking = () => { window.speechSynthesis.cancel(); setIsSpeaking(false); };
+  // ✅ UPDATED: Stop function resets ID
+  const stopSpeaking = () => { 
+      window.speechSynthesis.cancel(); 
+      setIsSpeaking(false); 
+      setSpeakingMessageId(null);
+  };
 
   const stopGenerating = () => {
     if (abortControllerRef.current) {
@@ -305,7 +345,10 @@ export default function Home() {
         });
       }
       await addDoc(collection(db, 'chats'), { sessionId: sessId, role: 'assistant', content: fullResponse, provider, createdAt: serverTimestamp() });
-      if (isListening) speakText(fullResponse);
+      
+      // ✅ REMOVED: Auto-speak logic removed as per request
+      // if (isListening) speakText(fullResponse, tempId); 
+
     } catch (err: any) { if (err.name !== 'AbortError') console.error(err); }
   };
 
@@ -378,9 +421,6 @@ export default function Home() {
       )}
 
       {/* SIDEBAR */}
-      {/* - Mobile: 'fixed' + 'translate' animation. 
-          - Desktop: 'lg:static' + width transition (shifts main content). 
-      */}
       <aside 
         className={`fixed inset-y-0 left-0 z-40 bg-[#1e1f20] border-r border-white/5 flex flex-col transition-all duration-300 ease-in-out
           lg:static lg:z-auto
@@ -415,11 +455,6 @@ export default function Home() {
                   <MessageSquare size={16} className="flex-none opacity-70" />
                   <span className="truncate w-40">{sess.title}</span>
                 </div>
-                {/* DELETE BUTTON:
-                   - opacity-100 (Always visible on mobile/touch)
-                   - lg:opacity-0 (Hidden by default on desktop)
-                   - lg:group-hover:opacity-100 (Visible on hover on desktop)
-                */}
                 <button 
                     onClick={(e) => deleteSession(e, sess.id)} 
                     className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-red-400 p-1.5 transition-opacity"
@@ -442,12 +477,10 @@ export default function Home() {
       </aside>
 
       {/* MAIN CONTENT */}
-      {/* flex-1 allows it to fill remaining space. Since Sidebar is static on desktop, this container shrinks/grows automatically */}
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0">
         
         {/* HEADER */}
         <div className="flex-none h-16 flex items-center px-4 z-20 bg-gradient-to-b from-[#131314] via-[#131314]/95 to-transparent backdrop-blur-none">
-          {/* Main Menu Button: Hidden on Desktop if sidebar is OPEN (prevents duplicate buttons) */}
           <button 
             onClick={() => setSidebarOpen(true)} 
             className={`p-2 text-gray-400 hover:bg-[#2c2d2e] hover:text-white rounded-full transition-colors mr-3 active:scale-95 ${sidebarOpen ? 'lg:hidden opacity-0 pointer-events-none' : 'opacity-100'}`}
@@ -480,7 +513,7 @@ export default function Home() {
                   <div key={i} className={`mb-4 md:mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-3 py-2 md:px-4 md:py-2.5 rounded-2xl' : ''}`}>
                       <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
-                          {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} onSpeak={speakText} />}
+                          {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} msgId={m.id || `groq-${i}`} isSpeaking={speakingMessageId === (m.id || `groq-${i}`)} onToggleSpeak={speakText} />}
                       </div>
                     </div>
                   </div>
@@ -502,7 +535,7 @@ export default function Home() {
                     <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-3 py-2 md:px-4 md:py-2.5 rounded-2xl' : ''}`}>
                        {m.image && (<div className="mb-2"><img src={m.image} alt="Upload" className="max-h-40 md:max-h-48 rounded-lg border border-[#3c3d3e] object-contain bg-black/50" /></div>)}
                        <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
-                         {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} onSpeak={speakText} />}
+                         {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} msgId={m.id || `google-${i}`} isSpeaking={speakingMessageId === (m.id || `google-${i}`)} onToggleSpeak={speakText} />}
                       </div>
                     </div>
                   </div>
