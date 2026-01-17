@@ -1,4 +1,5 @@
 'use client';
+export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 // ✅ Added imports for Markdown rendering
