@@ -1,8 +1,8 @@
 'use client';
+// ✅ Keep this to force dynamic rendering
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
-// ✅ Added imports for Markdown rendering
+import { useState, useEffect, Suspense } from 'react'; // ✅ Added Suspense
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math'; 
@@ -19,7 +19,7 @@ import {
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
-  collection, query, where, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDocs, writeBatch, 
+  collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDocs, writeBatch, 
   limit, startAfter, getCountFromServer, QueryDocumentSnapshot, DocumentData, getDoc 
 } from 'firebase/firestore';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -52,7 +52,7 @@ type ChatMessage = {
    createdAt: any;
 };
 
-// --- COMPONENTS (REUSED FROM MAIN PAGE) ---
+// --- COMPONENTS ---
 
 const CodeBlock = ({ language, code }: { language: string, code: string }) => {
   const [copied, setCopied] = useState(false);
@@ -109,13 +109,14 @@ const AdminMarkdownRenderer = ({ content }: { content: string }) => {
   );
 };
 
-export default function AdminPortal() {
+// ⚠️ MAIN LOGIC MOVED INTO A SEPARATE COMPONENT
+function AdminContent() {
   const [user, setUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [processingAction, setProcessingAction] = useState(false); 
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams(); // ✅ Safe to use here now
 
   // Admin Data with Pagination
   const [users, setUsers] = useState<UserData[]>([]);
@@ -827,5 +828,14 @@ export default function AdminPortal() {
         </div>
       </main>
     </div>
+  );
+}
+
+// ✅ NEW DEFAULT EXPORT WRAPPED IN SUSPENSE
+export default function AdminPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center font-mono">Initializing Admin Portal...</div>}>
+      <AdminContent />
+    </Suspense>
   );
 }

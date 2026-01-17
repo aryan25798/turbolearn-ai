@@ -79,7 +79,7 @@ export async function POST(req: Request) {
     let model;
     if (provider === 'google') {
       // ✅ FIX: Use gemini-2.5-flash (Stable Production Model)
-      model = google('gemini-1.5-flash'); 
+      model = google('gemini-2.5-flash'); 
     } else if (provider === 'groq') {
       // ✅ Llama 3.3 Versatile: Text ONLY (Super fast reasoning)
       model = groq('llama-3.3-70b-versatile'); 
