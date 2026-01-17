@@ -747,7 +747,7 @@ export default function Home() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={isListening ? "Listening..." : focusedProvider ? `Talk to ${focusedProvider === 'groq' ? 'Llama' : 'Gemini'}...` : "Ask anything..."}
-                className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3 md:py-4 pl-12 md:pl-14 pr-20 md:pr-28 
+                className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3 md:py-4 pl-12 md:pl-14 pr-36 md:pr-40 
                   focus:outline-none focus:ring-1 focus:ring-white/10 focus:bg-[#2c2d2e]
                   transition-all text-[15px] border border-[#2c2d2e] shadow-lg hover:shadow-xl
                   ${isListening ? 'border-red-500/50 bg-red-900/10' : ''}`}
@@ -762,8 +762,8 @@ export default function Home() {
 
               {/* RIGHT ACTIONS (Voice/Send) */}
               <div className="absolute right-2 top-2 bottom-2 flex items-center gap-1 md:gap-2">
-                 <button type="button" onClick={() => setCameraMode('scan')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10 hidden sm:block" title="Scan Text"><ScanText size={18} /></button>
-                 <button type="button" onClick={() => setCameraMode('capture')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10 hidden sm:block" title="Camera"><Camera size={18} /></button>
+                 <button type="button" onClick={() => setCameraMode('scan')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10" title="Scan Text"><ScanText size={18} /></button>
+                 <button type="button" onClick={() => setCameraMode('capture')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10" title="Camera"><Camera size={18} /></button>
                 <button type="button" onClick={toggleVoiceInput} className={`p-2 md:p-2.5 rounded-full transition-all active:scale-90 ${isListening ? 'text-white bg-red-500 animate-pulse shadow-lg shadow-red-500/30' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>
                   <Mic size={20} />
                 </button>
