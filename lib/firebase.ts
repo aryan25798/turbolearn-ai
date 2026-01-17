@@ -1,18 +1,19 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
-// Your exact config (keep yours)
 const firebaseConfig = {
-  apiKey: "AIzaSyDis973yN78yNM3_tL7P_3IEXNwbC3WGq8",
-  authDomain: "fast-chat-app-72874.firebaseapp.com",
-  projectId: "fast-chat-app-72874",
-  storageBucket: "fast-chat-app-72874.firebasestorage.app",
-  messagingSenderId: "821071796025",
-  appId: "1:821071796025:web:7473759cc27d0ddd39bae8"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
+// Singleton pattern: prevent initializing app multiple times during navigation
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
 export const db = getFirestore(app);
-export const auth = getAuth(app); // Export Auth
-export const googleProvider = new GoogleAuthProvider(); // Export Google Provider
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
