@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import Webcam from 'react-webcam';
-import { X, Check, RotateCcw, ScanLine, Zap, ZapOff, Aperture, Maximize2 } from 'lucide-react';
+import { X, Check, RotateCcw, ScanLine, Zap, ZapOff } from 'lucide-react';
 
 // Types
 type BoundingBox = {
@@ -30,8 +30,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
   const [focusPoint, setFocusPoint] = useState<{x: number, y: number} | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
 
-  // 1. Safe Camera Constraints (Avoids OverconstrainedError)
-  // We strictly ask for resolution here. Focus/Torch are applied progressively later.
+  // 1. Safe Camera Constraints
   const videoConstraints = {
     facingMode: 'environment',
     width: { ideal: 1920 }, 
@@ -43,24 +42,22 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
     setIsCameraReady(true);
     const track = stream.getVideoTracks()[0];
     
-    // Attempt to check capabilities without crashing
-    const capabilities = track.getCapabilities ? track.getCapabilities() : {} as any;
+    // ✅ Fix: Cast to 'any' to avoid TypeScript deployment errors
+    const capabilities = (track as any).getCapabilities ? (track as any).getCapabilities() : {};
     
-    // Check Torch Support
     if (capabilities.torch) {
       setHasTorch(true);
     }
 
-    // Attempt to set Continuous Focus (if supported)
-    // We do this in a try/catch block so it doesn't crash the app if unsupported
+    // Attempt Continuous Focus
     try {
       if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
          track.applyConstraints({
             advanced: [{ focusMode: 'continuous' }] as any
-         }).catch(err => console.log("Focus mode not supported:", err));
+         }).catch(() => {}); // ✅ Fix: Catch promise rejection
       }
     } catch (e) {
-      // Ignore errors for devices that don't allow setting this
+      // Ignore
     }
   }, []);
 
@@ -83,15 +80,12 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
     const src = webcamRef.current?.getScreenshot();
     if (!src) return;
 
-    // We use a Canvas to ensure the image is processed consistently 
-    // This fixes orientation and ensures consistent quality for both OCR and Photos
     const img = new Image();
     img.src = src;
     img.onload = () => {
         const canvas = document.createElement('canvas');
         
-        // Use Full HD max (1920px) for crisp quality, but manageable size
-        // If it's a normal photo, we might want more detail, but 1920 is usually optimal for web AI
+        // HD Quality
         const maxDim = 1920; 
         const scale = Math.min(maxDim / Math.max(img.width, img.height), 1); 
         
@@ -100,12 +94,10 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
         
         const ctx = canvas.getContext('2d');
         if (ctx) {
-            // High quality smoothing
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             
-            // Export as High Quality JPEG (0.9)
             const optimizedImage = canvas.toDataURL('image/jpeg', 0.90);
             setImage(optimizedImage);
 
@@ -113,14 +105,13 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
               setViewState('processing');
               performOCR(optimizedImage);
             } else {
-              // For normal camera, we still close the modal but return the high-quality image
               onCapture(optimizedImage);
             }
         }
     };
   }, [webcamRef, mode, onCapture]);
 
-  // 5. OCR Logic (Unchanged)
+  // 5. OCR Logic
   const performOCR = async (base64Image: string) => {
     try {
       const res = await fetch('/api/ocr', {
@@ -144,7 +135,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
     }
   };
 
-  // 6. Selection Logic (Unchanged)
+  // 6. Selection Logic
   const toggleSelection = (index: number) => {
     const newSet = new Set(selectedIndices);
     if (newSet.has(index)) newSet.delete(index);
@@ -171,8 +162,8 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
     onScan(selectedItems.join(' '));
   };
 
-  // 7. Robust Tap to Focus
-  const handleTapToFocus = (e: React.MouseEvent<HTMLDivElement>) => {
+  // 7. Robust Tap to Focus (Fixed Error)
+  const handleTapToFocus = async (e: React.MouseEvent<HTMLDivElement>) => {
       if (viewState !== 'camera' || !isCameraReady) return;
       
       const rect = e.currentTarget.getBoundingClientRect();
@@ -180,39 +171,32 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
       const y = e.clientY - rect.top;
       setFocusPoint({ x, y });
       
-      // Visual feedback is immediate.
-      // Hardware focus is attempted safely.
       try {
           const stream = webcamRef.current?.video?.srcObject as MediaStream;
           const track = stream?.getVideoTracks()[0];
-          const capabilities = track?.getCapabilities ? track.getCapabilities() : {} as any;
+          const capabilities = (track as any).getCapabilities ? (track as any).getCapabilities() : {};
 
-          // If the device supports 'pointsOfInterest' (standard for tap-to-focus)
+          // If the device supports 'pointsOfInterest'
           if (capabilities.pointsOfInterest) {
-              // Calculate normalized coordinates (0.0 to 1.0)
-              // This part is highly browser-specific and often experimental,
-              // but we wrap in try-catch so it's safe.
               const normX = x / rect.width;
               const normY = y / rect.height;
-              // @ts-ignore
-              track.applyConstraints({
-                  advanced: [{ pointsOfInterest: [{ x: normX, y: normY }] }]
-              });
+              await track.applyConstraints({
+                  advanced: [{ pointsOfInterest: [{ x: normX, y: normY }] }] as any
+              }).catch(() => {});
           } 
-          // Fallback: Toggle focus mode to trigger a re-focus
+          // Fallback: Toggle focus mode
           else if (capabilities.focusMode && capabilities.focusMode.includes('auto')) {
-             track?.applyConstraints({ advanced: [{ focusMode: 'auto' }] as any })
-                .then(() => {
-                    // Switch back to continuous after a short delay
-                    if (capabilities.focusMode.includes('continuous')) {
-                        setTimeout(() => {
-                             track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] as any }).catch(() => {});
-                        }, 1000);
-                    }
-                });
+             await track?.applyConstraints({ advanced: [{ focusMode: 'auto' }] as any }).catch(() => {});
+             
+             // Re-enable continuous focus after a short delay
+             if (capabilities.focusMode.includes('continuous')) {
+                 setTimeout(() => {
+                      track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] as any }).catch(() => {});
+                 }, 1000);
+             }
           }
       } catch(e) {
-          // If focus fails, we just ignore it. The visual ring still provides feedback.
+          // Silent fail - visual ring is enough
       }
 
       setTimeout(() => setFocusPoint(null), 1000);
@@ -256,7 +240,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
               ref={webcamRef}
               screenshotFormat="image/jpeg"
               videoConstraints={videoConstraints}
-              onUserMedia={handleUserMedia} // ✅ Hook to safely initialize capabilities
+              onUserMedia={handleUserMedia}
               onUserMediaError={(e) => console.warn("Camera Load Error", e)}
               className="absolute inset-0 w-full h-full object-cover"
             />
@@ -269,7 +253,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
                 />
             )}
             
-            {/* Grid Overlay for framing */}
+            {/* Grid Overlay */}
             <div className="absolute inset-0 pointer-events-none opacity-10">
                 <div className="w-full h-1/3 border-b border-white"></div>
                 <div className="w-full h-1/3 border-b border-white top-1/3 absolute"></div>
@@ -284,7 +268,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
           <div className="relative w-full h-full animate-in fade-in duration-500">
             <img src={image} alt="Captured" className="w-full h-full object-contain bg-[#121212]" />
             
-            {/* 1. PROCESSING SCANNER EFFECT */}
+            {/* SCANNER EFFECT */}
             {viewState === 'processing' && (
               <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-black/40 backdrop-blur-[2px]">
                  <div className="relative w-full max-w-sm h-64 border border-blue-400/30 rounded-lg overflow-hidden">
@@ -296,7 +280,7 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
               </div>
             )}
 
-            {/* 2. GOOGLE LENS SELECTION UI */}
+            {/* SELECTION UI */}
             {viewState === 'selection' && (
               <div className="absolute inset-0 z-20">
                 {ocrResult.map((item, i) => (
@@ -305,8 +289,8 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
                     onClick={(e) => { e.stopPropagation(); toggleSelection(i); }}
                     className={`absolute transition-all duration-200 cursor-pointer rounded-sm flex items-center justify-center
                       ${selectedIndices.has(i) 
-                        ? 'bg-blue-500/40 shadow-[0_0_10px_rgba(59,130,246,0.3)] ring-1 ring-blue-400' // Highlight Style
-                        : 'bg-white/10 hover:bg-white/20' // Subtle Hint Style
+                        ? 'bg-blue-500/40 shadow-[0_0_10px_rgba(59,130,246,0.3)] ring-1 ring-blue-400'
+                        : 'bg-white/10 hover:bg-white/20'
                       }
                     `}
                     style={{
@@ -325,18 +309,16 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
 
       {/* BOTTOM CONTROLS */}
       <div className="flex-none bg-black/90 px-6 py-8 pb-[calc(env(safe-area-inset-bottom)+20px)] border-t border-white/5 backdrop-blur-lg">
-        
-        {/* SHUTTER BUTTON */}
         {viewState === 'camera' ? (
           <div className="flex justify-center items-center gap-8">
-            <div className="w-12" /> {/* Spacer */}
+            <div className="w-12" /> 
             <button 
               onClick={capture}
               className="w-20 h-20 rounded-full border-4 border-white/20 p-1.5 flex items-center justify-center hover:border-white transition-all active:scale-90 group relative"
             >
               <div className="w-full h-full bg-white rounded-full group-hover:scale-95 transition-transform shadow-[0_0_20px_rgba(255,255,255,0.3)]" />
             </button>
-            <div className="w-12" /> {/* Spacer */}
+            <div className="w-12" /> 
           </div>
         ) : viewState === 'selection' ? (
           <div className="flex items-center justify-between gap-4 animate-in slide-in-from-bottom-4 duration-300">
@@ -348,7 +330,6 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
                <span className="text-[10px] uppercase tracking-wider font-bold">Retake</span>
              </button>
 
-             {/* Dynamic Center Button */}
              <div className="flex-1 px-4">
                  <button 
                      onClick={selectAll}
@@ -370,7 +351,6 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
         ) : null}
       </div>
       
-      {/* Global Styles for Scanner Animation */}
       <style jsx global>{`
         @keyframes scan {
           0% { top: 0%; opacity: 0; }
