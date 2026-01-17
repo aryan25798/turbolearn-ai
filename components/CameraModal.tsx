@@ -111,7 +111,10 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
     img.src = src;
     img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 1920; 
+        
+        // ⚡️ SPEED FIX: Reduce max resolution from 1920 to 1024.
+        // This makes the payload ~4x smaller, preventing Vercel timeouts.
+        const maxDim = 1024; 
         const scale = Math.min(maxDim / Math.max(img.width, img.height), 1); 
         
         canvas.width = img.width * scale;
@@ -126,7 +129,8 @@ export default function CameraModal({ mode, onClose, onCapture, onScan }: Camera
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             ctx.filter = 'none'; 
             
-            const optimizedImage = canvas.toDataURL('image/jpeg', 0.92);
+            // ⚡️ SPEED FIX: Lower JPEG quality to 0.7
+            const optimizedImage = canvas.toDataURL('image/jpeg', 0.7);
             setImage(optimizedImage);
 
             if (mode === 'scan') {

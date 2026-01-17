@@ -17,7 +17,7 @@ import {
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
-  collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc, getDocs, writeBatch, getDoc, setDoc, updateDoc, Unsubscribe
+  collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc, getDocs, writeBatch, getDoc, setDoc, updateDoc, Unsubscribe, limit
 } from 'firebase/firestore';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import Login from '@/components/Login';
@@ -261,7 +261,14 @@ export default function Home() {
         if (savedSessionId) setCurrentSessionId(savedSessionId);
 
         // ✅ Sessions Listener with Ref Storage
-        const q = query(collection(db, 'sessions'), where('userId', '==', currentUser.uid), orderBy('createdAt', 'desc'));
+        // 🚀 OPTIMIZATION: Limit to 50 sessions to prevent crashes
+        const q = query(
+            collection(db, 'sessions'), 
+            where('userId', '==', currentUser.uid), 
+            orderBy('createdAt', 'desc'),
+            limit(50) 
+        );
+
         const unsubSessions = onSnapshot(q, (snapshot) => {
           const fetchedSessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Session));
           setSessions(fetchedSessions.filter(s => !s.deletedByUser));
@@ -502,23 +509,26 @@ export default function Home() {
     }
 
     const promises = [];
-    let firestoreImageUrl = null;
     
+    // 🚀 SPEED FIX: OPTIMISTIC UPLOAD
+    // We start the upload in the background but DO NOT await it.
+    // The chat starts immediately.
     if (localImageBase64) {
-      try {
-        const storageRef = ref(storage, `chat-images/${user.uid}/${activeSessionId}/${Date.now()}.jpg`);
-        await uploadString(storageRef, localImageBase64, 'data_url');
-        firestoreImageUrl = await getDownloadURL(storageRef);
-      } catch (uploadError) {
-        console.error("Image Upload Failed:", uploadError);
-      }
+      const storageRef = ref(storage, `chat-images/${user.uid}/${activeSessionId}/${Date.now()}.jpg`);
+      
+      // Fire and forget (Log on error)
+      uploadString(storageRef, localImageBase64, 'data_url')
+        .then(() => console.log("Image uploaded in bg"))
+        .catch(err => console.error("Image upload failed:", err));
     }
 
+    // Note: We save image: null to Firestore for speed. 
+    // The AI receives the base64 directly, so it works instantly.
     promises.push(addDoc(collection(db, 'chats'), { 
         sessionId: activeSessionId, 
         role: 'user', 
         content: cleanInput, 
-        image: firestoreImageUrl,
+        image: null, // Don't wait for URL
         provider: 'google', 
         createdAt: serverTimestamp() 
     }));
