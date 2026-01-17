@@ -57,7 +57,7 @@ const CodeBlock = ({ language, code }: { language: string, code: string }) => {
       </div>
       <div className="overflow-x-auto w-full">
         <SyntaxHighlighter 
-          language={language.toLowerCase()} 
+          language={language?.toLowerCase() || 'text'} 
           style={vscDarkPlus} 
           PreTag="div" 
           showLineNumbers={true} 
@@ -83,7 +83,7 @@ const MarkdownRenderer = ({ content, onSpeak }: { content: string, onSpeak: (tex
       </button>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
         code({ node, inline, className, children, ...props }: any) {
-          const match = /language-(\\w+)/.exec(className || '');
+          const match = /language-(\w+)/.exec(className || '');
           return !inline && match ? <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} /> : <code className="bg-[#2c2d2e] text-orange-200 px-1 py-0.5 rounded text-xs font-mono border border-white/5 break-words whitespace-pre-wrap" {...props}>{children}</code>;
         },
         p({ children }) { return <p className="mb-3 text-sm md:text-[15px] leading-6 md:leading-7 text-gray-200">{children}</p>; },
@@ -91,6 +91,7 @@ const MarkdownRenderer = ({ content, onSpeak }: { content: string, onSpeak: (tex
         ol({ children }) { return <ol className="list-decimal pl-4 mb-3 space-y-1 text-gray-300 text-sm md:text-[15px]">{children}</ol>; },
         h1({ children }) { return <h1 className="text-lg md:text-xl font-bold mb-3 text-white pb-2 border-b border-gray-700">{children}</h1>; },
         h2({ children }) { return <h2 className="text-base md:text-lg font-bold mb-2 text-white mt-4">{children}</h2>; },
+        h3({ children }) { return <h3 className="text-sm md:text-base font-bold mb-2 text-white mt-3">{children}</h3>; },
       }}>{content}</ReactMarkdown>
     </div>
   );
@@ -103,9 +104,9 @@ export default function Home() {
   
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true); // Default open on desktop
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Media
+  // Media & Tools
   const [image, setImage] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false); 
@@ -126,9 +127,9 @@ export default function Home() {
 
   // 1. AUTH & INIT
   useEffect(() => {
-    // Initial Sidebar State based on screen size
+    // Initial Sidebar State based on screen size (Responsive Update)
     if (typeof window !== 'undefined') {
-        setSidebarOpen(window.innerWidth >= 768);
+        setSidebarOpen(window.innerWidth >= 1024); // Changed to 1024 for better tablet handling
     }
 
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
@@ -178,32 +179,27 @@ export default function Home() {
     setGroqMessages([]); setGoogleMessages([]);
     setImage(null);
     stopSpeaking();
-    if (window.innerWidth < 768) setSidebarOpen(false);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
   const selectSession = (sessId: string) => {
     setCurrentSessionId(sessId);
     localStorage.setItem('turboLastSession', sessId);
-    if (window.innerWidth < 768) setSidebarOpen(false);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
-  // --- UPDATED DELETE FUNCTION (CRASH PROOF) ---
   const deleteSession = async (e: React.MouseEvent, sessId: string) => {
     e.stopPropagation();
     if (!confirm("Delete this chat?")) return;
     
-    // UI Cleanup first
     if (currentSessionId === sessId) startNewChat();
 
     try {
-      // 1. Delete the Session Document
       await deleteDoc(doc(db, 'sessions', sessId));
 
-      // 2. Query all messages for this session
       const q = query(collection(db, 'chats'), where('sessionId', '==', sessId));
       const snapshot = await getDocs(q);
 
-      // 3. Batch delete logic (Chunked by 450 to avoid 500 limit)
       const BATCH_SIZE = 450;
       let batch = writeBatch(db);
       let count = 0;
@@ -214,12 +210,11 @@ export default function Home() {
 
         if (count >= BATCH_SIZE) {
           await batch.commit();
-          batch = writeBatch(db); // Create new batch
+          batch = writeBatch(db); 
           count = 0;
         }
       }
 
-      // Commit remaining messages
       if (count > 0) {
         await batch.commit();
       }
@@ -345,17 +340,18 @@ export default function Home() {
     const userMsg: Message = { id: tempId, role: 'user', content: cleanInput, image: image, provider: 'google' };
 
     setGoogleMessages(prev => [...prev, userMsg]);
-    if (!image) setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
+    
+    // Updated: Allow Groq to run even with image (using backend context/OCR)
+    setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
 
     const promises = [
         addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, image: image, provider: 'google', createdAt: serverTimestamp() }),
-        streamAnswer('google', [...googleMessages, userMsg], activeSessionId!, controller.signal, image)
+        streamAnswer('google', [...googleMessages, userMsg], activeSessionId!, controller.signal, image),
+        
+        // Updated: Send request to Groq + Save Groq Chat
+        addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() }),
+        streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, image) 
     ];
-
-    if (!image) {
-        promises.push(addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() }));
-        promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
-    }
 
     await Promise.all(promises);
     setLoading(false);
@@ -368,7 +364,7 @@ export default function Home() {
   return (
     <div className="flex h-[100dvh] bg-[#131314] text-gray-100 font-sans overflow-hidden">
       
-      {/* CAMERA MODAL */}
+      {/* CAMERA MODAL (Updated) */}
       {cameraMode && (
         <CameraModal 
           mode={cameraMode}
@@ -381,7 +377,7 @@ export default function Home() {
       {/* MOBILE OVERLAY */}
       {sidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black/60 z-30 md:hidden backdrop-blur-sm animate-in fade-in duration-200"
+          className="fixed inset-0 bg-black/60 z-30 lg:hidden backdrop-blur-sm animate-in fade-in duration-200"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -389,12 +385,13 @@ export default function Home() {
       {/* SIDEBAR */}
       <aside 
         className={`fixed inset-y-0 left-0 z-40 bg-[#1e1f20] border-r border-white/5 flex flex-col transition-all duration-300 ease-in-out
-          ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full md:translate-x-0 md:w-0'} 
+          ${sidebarOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full lg:translate-x-0 lg:w-0'} 
           overflow-hidden whitespace-nowrap
         `}
       >
         <div className="p-4 flex flex-col gap-4 min-w-[280px]">
-          <div className="flex items-center justify-between">
+          {/* UPDATED: Header with visible Toggle Button on Desktop */}
+          <div className="flex items-center gap-3">
             <button 
               onClick={() => setSidebarOpen(false)} 
               className="p-2 text-gray-400 hover:bg-[#333537] hover:text-white rounded-full transition-colors"
@@ -402,7 +399,9 @@ export default function Home() {
             >
               <Menu size={20} />
             </button>
+            <span className="text-sm font-bold text-gray-200 px-2 lg:block hidden">TurboLearn</span>
           </div>
+
           <button onClick={startNewChat} className="flex items-center gap-3 px-4 py-3 rounded-full bg-[#1a1b1c] hover:bg-[#333537] transition-all text-sm font-medium text-gray-300 shadow-sm border border-white/5 active:scale-95">
             <Plus size={18} className="text-gray-400" /> New chat
           </button>
@@ -418,7 +417,14 @@ export default function Home() {
                   <MessageSquare size={16} className="flex-none opacity-70" />
                   <span className="truncate w-40">{sess.title}</span>
                 </div>
-                <button onClick={(e) => deleteSession(e, sess.id)} className="opacity-0 group-hover:opacity-100 hover:text-red-400 p-1.5 transition-opacity"><Trash2 size={14} /></button>
+                {/* UPDATED: Delete button visible on mobile, hover on desktop */}
+                <button 
+                    onClick={(e) => deleteSession(e, sess.id)} 
+                    className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-red-400 p-1.5 transition-opacity"
+                    title="Delete Chat"
+                >
+                    <Trash2 size={14} />
+                </button>
               </div>
             ))}
           </div>
@@ -438,15 +444,15 @@ export default function Home() {
         
         {/* HEADER */}
         <div className="flex-none h-16 flex items-center px-4 z-20 bg-gradient-to-b from-[#131314] via-[#131314]/95 to-transparent backdrop-blur-none">
-          {/* Menu Button only shows here if sidebar is closed (Desktop) or always on Mobile if closed */}
+          {/* Menu Button - Shows when Sidebar is CLOSED (Desktop) or ALWAYS (Mobile) */}
           <button 
             onClick={() => setSidebarOpen(true)} 
-            className={`p-2 text-gray-400 hover:bg-[#2c2d2e] hover:text-white rounded-full transition-colors mr-3 active:scale-95 ${sidebarOpen ? 'md:hidden opacity-0 pointer-events-none' : 'opacity-100'}`}
+            className={`p-2 text-gray-400 hover:bg-[#2c2d2e] hover:text-white rounded-full transition-colors mr-3 active:scale-95 ${sidebarOpen ? 'lg:hidden opacity-0 pointer-events-none' : 'opacity-100'}`}
           >
             <Menu size={24} />
           </button>
 
-          {!currentSessionId && groqMessages.length === 0 && <span className="text-base md:text-lg font-medium text-gray-500 mx-auto pointer-events-none tracking-tight">TurboLearn 2.0</span>}
+          {!currentSessionId && groqMessages.length === 0 && <span className="text-base md:text-lg font-medium text-gray-500 mx-auto pointer-events-none tracking-tight">TurboLearn AI</span>}
           
           {isSpeaking && (
             <button onClick={stopSpeaking} className="ml-auto flex items-center gap-2 bg-red-600/90 backdrop-blur-md hover:bg-red-700 text-white px-3 py-1.5 rounded-full shadow-lg transition-all animate-pulse text-xs font-bold z-50">
@@ -457,19 +463,13 @@ export default function Home() {
 
         {/* CHAT SCROLL AREA */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-3 md:p-4 pb-0">
-          <div className={`mx-auto grid grid-cols-1 lg:grid-cols-2 gap-4 h-full pb-36 md:pb-40 transition-all duration-300 ${sidebarOpen ? 'max-w-5xl' : 'max-w-7xl'}`}>
+          <div className={`mx-auto grid grid-cols-1 lg:grid-cols-2 gap-4 h-full pb-36 md:pb-40 transition-all duration-300 ${sidebarOpen ? 'max-w-6xl' : 'max-w-7xl'}`}>
             
             {/* GROQ CARD */}
             <div className="flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-lg relative min-h-[250px] lg:min-h-0">
-              {((image && loading) || (googleMessages.length > 0 && googleMessages[googleMessages.length-1].role === 'user' && googleMessages[googleMessages.length-1].image)) && (
-                <div className="absolute inset-0 bg-[#1e1f20]/95 z-20 flex flex-col items-center justify-center text-center p-6 rounded-2xl">
-                  <EyeOff size={32} className="text-gray-500 mb-2" />
-                  <p className="text-xs text-gray-400 font-medium">Text-Only Model Paused</p>
-                </div>
-              )}
               <div className="flex items-center gap-2 px-4 py-3 bg-[#1e1f20] border-b border-[#2c2d2e] rounded-t-2xl sticky top-0 z-10">
                 <Cpu size={16} className="text-orange-400" />
-                <span className="font-semibold text-gray-200 text-xs md:text-sm">Llama 3</span>
+                <span className="font-semibold text-gray-200 text-xs md:text-sm">Llama 3.3 (Fast)</span>
               </div>
               <div className="flex-1 p-3 md:p-4 overflow-y-auto custom-scrollbar">
                 {!currentSessionId && groqMessages.length === 0 && <div className="h-40 md:h-full flex items-center justify-center text-gray-700 opacity-30"><Cpu size={40} /></div>}
@@ -477,7 +477,7 @@ export default function Home() {
                   <div key={i} className={`mb-4 md:mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-3 py-2 md:px-4 md:py-2.5 rounded-2xl' : ''}`}>
                       <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
-                         {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} onSpeak={speakText} />}
+                          {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} onSpeak={speakText} />}
                       </div>
                     </div>
                   </div>
@@ -490,14 +490,14 @@ export default function Home() {
             <div className="flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-lg min-h-[250px] lg:min-h-0">
               <div className="flex items-center gap-2 px-4 py-3 bg-[#1e1f20] border-b border-[#2c2d2e] rounded-t-2xl sticky top-0 z-10">
                 <Sparkles size={16} className="text-blue-400" />
-                <span className="font-semibold text-gray-200 text-xs md:text-sm">Gemini Pro</span>
+                <span className="font-semibold text-gray-200 text-xs md:text-sm">Gemini 2.5 (Vision)</span>
               </div>
               <div className="flex-1 p-3 md:p-4 overflow-y-auto custom-scrollbar">
                 {!currentSessionId && googleMessages.length === 0 && <div className="h-40 md:h-full flex items-center justify-center text-gray-700 opacity-30"><Sparkles size={40} /></div>}
                 {googleMessages.map((m, i) => (
                   <div key={i} className={`mb-4 md:mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-3 py-2 md:px-4 md:py-2.5 rounded-2xl' : ''}`}>
-                       {m.image && (<div className="mb-2"><img src={m.image} alt="Upload" className="max-h-40 md:max-h-48 rounded-lg border border-[#3c3d3e] object-contain" /></div>)}
+                       {m.image && (<div className="mb-2"><img src={m.image} alt="Upload" className="max-h-40 md:max-h-48 rounded-lg border border-[#3c3d3e] object-contain bg-black/50" /></div>)}
                        <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
                          {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} onSpeak={speakText} />}
                       </div>
@@ -512,7 +512,7 @@ export default function Home() {
 
         {/* INPUT AREA (Fixed Bottom) */}
         <div className="flex-none p-3 md:p-6 bg-[#131314] pb-[calc(env(safe-area-inset-bottom)+12px)] absolute bottom-0 w-full z-20">
-          <div className="max-w-4xl mx-auto relative">
+          <div className={`mx-auto relative transition-all duration-300 ${sidebarOpen ? 'max-w-4xl' : 'max-w-5xl'}`}>
             {image && (
               <div className="absolute -top-14 left-0 bg-[#1e1f20] p-1.5 rounded-lg border border-[#2c2d2e] flex items-center gap-2 shadow-xl animate-in slide-in-from-bottom-2">
                 <img src={image} alt="Preview" className="h-10 w-10 object-cover rounded" />
@@ -524,20 +524,20 @@ export default function Home() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={isListening ? "Listening..." : "Message TurboLearn..."}
+                placeholder={isListening ? "Listening..." : "Ask anything or scan..."}
                 className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3.5 pl-32 pr-28 focus:outline-none focus:bg-[#262729] focus:ring-1 focus:ring-white/10 transition-all text-[15px] border border-[#2c2d2e] shadow-lg ${isListening ? 'border-red-500/50 bg-red-500/5' : ''}`}
                 style={{ fontSize: '16px' }} // Prevents iOS Zoom
               />
               
-              {/* LEFT ACTIONS */}
+              {/* LEFT ACTIONS (Media) */}
               <div className="absolute left-2 top-1.5 bottom-1.5 flex items-center gap-0.5">
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-400 hover:text-white rounded-full transition-colors active:bg-white/10"><ImageIcon size={20} /></button>
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-400 hover:text-white rounded-full transition-colors active:bg-white/10" title="Upload Image"><ImageIcon size={20} /></button>
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
-                <button type="button" onClick={() => setCameraMode('capture')} className="p-2 text-gray-400 hover:text-blue-400 rounded-full transition-colors active:bg-white/10"><Camera size={20} /></button>
-                <button type="button" onClick={() => setCameraMode('scan')} className="p-2 text-gray-400 hover:text-green-400 rounded-full transition-colors active:bg-white/10"><ScanText size={20} /></button>
+                <button type="button" onClick={() => setCameraMode('capture')} className="p-2 text-gray-400 hover:text-blue-400 rounded-full transition-colors active:bg-white/10" title="Take Photo"><Camera size={20} /></button>
+                <button type="button" onClick={() => setCameraMode('scan')} className="p-2 text-gray-400 hover:text-green-400 rounded-full transition-colors active:bg-white/10" title="Scan Text (Lens)"><ScanText size={20} /></button>
               </div>
 
-              {/* RIGHT ACTIONS */}
+              {/* RIGHT ACTIONS (Voice/Send) */}
               <div className="absolute right-2 top-1.5 bottom-1.5 flex items-center gap-1">
                 <button type="button" onClick={toggleVoiceInput} className={`p-2 rounded-full transition-all active:scale-90 ${isListening ? 'text-red-500 bg-red-500/10' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>
                   <Mic size={20} />
@@ -552,7 +552,7 @@ export default function Home() {
                 </button>
               </div>
             </form>
-            <p className="text-center text-[10px] text-gray-600 mt-2 hidden md:block">TurboLearn can make mistakes. Verify important info.</p>
+            <p className="text-center text-[10px] text-gray-600 mt-2 hidden md:block">TurboLearn AI • Gemini 2.5 Flash • Llama 3.3</p>
           </div>
         </div>
       </main>
