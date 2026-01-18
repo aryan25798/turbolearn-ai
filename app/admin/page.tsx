@@ -15,7 +15,7 @@ import {
   Users, MessageSquare, CheckCircle, Trash2, Search, LogOut, 
   Ban, Eye, X, Shield, ImageIcon, Terminal, Clock, 
   BarChart3, Download, Filter, AlertCircle, Activity, Copy, Archive, Loader2, ChevronDown,
-  Menu, ArrowLeft // ✅ Added Menu and ArrowLeft for responsiveness
+  Menu, ArrowLeft, Crown, Edit3, Save, Zap, Home // ✅ Added Home Icon
 } from 'lucide-react';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -34,6 +34,8 @@ type UserData = {
   photoURL: string;
   role: 'admin' | 'user';
   status: 'pending' | 'approved' | 'banned';
+  tier?: 'free' | 'pro';
+  customQuota?: number;
   lastLogin: any;
   createdAt: any;
 };
@@ -120,6 +122,10 @@ function AdminContent() {
   // ✅ Responsive State
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
+  // ✅ Edit Mode State
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [tempQuota, setTempQuota] = useState<string>('');
+
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -139,7 +145,7 @@ function AdminContent() {
   });
 
   const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'approved' | 'banned'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'approved' | 'banned' | 'admin'>('all');
   
   // Tabs & Navigation State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'chats'>('dashboard');
@@ -152,55 +158,66 @@ function AdminContent() {
 
   // 1. AUTH CHECK & STATE RESTORATION
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (currentUser) => {
+    // 🔒 TRACK LISTENER TO PREVENT MEMORY LEAKS & PERMISSION ERRORS
+    let unsubscribeFirestore: (() => void) | null = null;
+
+    const unsubAuth = onAuthStateChanged(auth, async (currentUser) => {
+      // 🛑 Clean up previous listener immediately when auth state changes
+      if (unsubscribeFirestore) {
+        unsubscribeFirestore();
+        unsubscribeFirestore = null;
+      }
+
       if (currentUser) {
         const docRef = doc(db, 'users', currentUser.uid);
-        onSnapshot(docRef, async (docSnap) => {
-              const data = docSnap.data();
-              if (data && data.role === 'admin') {
-                  setUser(currentUser);
-                  setIsAdmin(true);
-                  
-                  // --- RESTORE STATE FROM URL ---
-                  const tabParam = searchParams.get('tab');
-                  const uidParam = searchParams.get('uid');
-                  const sessionParam = searchParams.get('sessionId');
+        
+        // ✅ Start new listener and store unsubscribe function
+        unsubscribeFirestore = onSnapshot(docRef, async (docSnap) => {
+             const data = docSnap.data();
+             if (data && data.role === 'admin') {
+                 setUser(currentUser);
+                 setIsAdmin(true);
+                 
+                 // --- RESTORE STATE FROM URL ---
+                 const tabParam = searchParams.get('tab');
+                 const uidParam = searchParams.get('uid');
+                 const sessionParam = searchParams.get('sessionId');
 
-                  if (tabParam === 'users' || tabParam === 'chats' || tabParam === 'dashboard') {
-                      setActiveTab(tabParam);
-                  }
+                 if (tabParam === 'users' || tabParam === 'chats' || tabParam === 'dashboard') {
+                     setActiveTab(tabParam);
+                 }
 
-                  // If we are in 'chats' and have a UID, load that user's sessions
-                  if (tabParam === 'chats' && uidParam) {
-                      try {
-                          const userDoc = await getDoc(doc(db, 'users', uidParam));
-                          if (userDoc.exists()) {
-                              const targetUser = { uid: userDoc.id, ...userDoc.data() } as UserData;
-                              setSelectedUserForChat(targetUser);
-                              
-                              // Fetch sessions for this user
-                              const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
-                              const snap = await getDocs(q);
-                              const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
-                              setUserSessions(fetchedSessions);
+                 // If we are in 'chats' and have a UID, load that user's sessions
+                 if (tabParam === 'chats' && uidParam) {
+                     try {
+                         const userDoc = await getDoc(doc(db, 'users', uidParam));
+                         if (userDoc.exists()) {
+                             const targetUser = { uid: userDoc.id, ...userDoc.data() } as UserData;
+                             setSelectedUserForChat(targetUser);
+                             
+                             // Fetch sessions for this user
+                             const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
+                             const snap = await getDocs(q);
+                             const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+                             setUserSessions(fetchedSessions);
 
-                              // If we also have a Session ID, load that chat
-                              if (sessionParam) {
-                                  setActiveSessionId(sessionParam);
-                                  // Fetch chat logs
-                                  const qLogs = query(collection(db, 'chats'), where('sessionId', '==', sessionParam), orderBy('createdAt', 'asc'));
-                                  const snapLogs = await getDocs(qLogs);
-                                  setChatLogs(snapLogs.docs.map(d => d.data() as ChatMessage));
-                              }
-                          }
-                      } catch (err) {
-                          console.error("Error restoring state:", err);
-                      }
-                  }
-              } else {
-                  router.push('/');
-              }
-              setLoading(false);
+                             // If we also have a Session ID, load that chat
+                             if (sessionParam) {
+                                 setActiveSessionId(sessionParam);
+                                 // Fetch chat logs
+                                 const qLogs = query(collection(db, 'chats'), where('sessionId', '==', sessionParam), orderBy('createdAt', 'asc'));
+                                 const snapLogs = await getDocs(qLogs);
+                                 setChatLogs(snapLogs.docs.map(d => d.data() as ChatMessage));
+                             }
+                         }
+                     } catch (err) {
+                         console.error("Error restoring state:", err);
+                     }
+                 }
+             } else {
+                 router.push('/');
+             }
+             setLoading(false);
         });
       } else {
         // 🔒 LOGOUT FIX: Reset state immediately when no user is present
@@ -209,7 +226,12 @@ function AdminContent() {
         setLoading(false);
       }
     });
-    return () => unsub();
+
+    // Cleanup on unmount
+    return () => {
+        unsubAuth();
+        if (unsubscribeFirestore) unsubscribeFirestore();
+    };
   }, []); 
 
   // 2. FETCH USERS (PAGINATED)
@@ -226,7 +248,15 @@ function AdminContent() {
               limit(USERS_PER_PAGE)
           );
 
-          if (filterStatus !== 'all') {
+          if (filterStatus === 'admin') {
+              // ✅ ADDED ADMIN FILTER
+              q = query(
+                  collection(db, 'users'), 
+                  where('role', '==', 'admin'),
+                  orderBy('createdAt', 'desc'), 
+                  limit(USERS_PER_PAGE)
+              );
+          } else if (filterStatus !== 'all') {
               q = query(
                   collection(db, 'users'), 
                   where('status', '==', filterStatus),
@@ -291,10 +321,10 @@ function AdminContent() {
       }
   }, [isAdmin, filterStatus]);
 
-  // 4. NAVIGATION & ACTIONS
+  // 4. ACTIONS & UPDATES
   const handleSwitchTab = (tab: 'dashboard' | 'users' | 'chats') => {
       setActiveTab(tab);
-      setIsSidebarOpen(false); // ✅ Close sidebar on mobile select
+      setIsSidebarOpen(false); 
       const params = new URLSearchParams(searchParams.toString());
       params.set('tab', tab);
       if (tab !== 'chats') {
@@ -357,13 +387,33 @@ function AdminContent() {
       }
   };
 
+  // ✅ NEW: Update User Tier/Quota via API
+  const handleUpdateUser = async (targetUid: string, updates: any) => {
+    try {
+        const response = await fetch('/api/admin/update-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                adminUid: user.uid,
+                targetUserId: targetUid,
+                updates: updates 
+            })
+        });
+
+        if (!response.ok) throw new Error("Update failed");
+
+        // Optimistic UI Update
+        setUsers(prev => prev.map(u => u.uid === targetUid ? { ...u, ...updates } : u));
+        setEditingUserId(null); // Close edit mode if open
+    } catch (e) {
+        alert("Failed to update user.");
+        console.error(e);
+    }
+  };
+
   const updateUserStatus = async (uid: string, status: 'approved' | 'banned' | 'pending') => {
-    try { 
-        await updateDoc(doc(db, 'users', uid), { status }); 
-        setUsers(prev => prev.map(u => u.uid === uid ? { ...u, status } : u));
-        fetchMetrics();
-    } 
-    catch (e) { alert("Failed to update status."); }
+    handleUpdateUser(uid, { status });
+    fetchMetrics();
   };
 
   const deleteUser = async (uid: string) => {
@@ -436,13 +486,15 @@ function AdminContent() {
   };
 
   const exportToCSV = () => {
-    const headers = ['UID', 'Name', 'Email', 'Role', 'Status', 'Joined'];
+    const headers = ['UID', 'Name', 'Email', 'Role', 'Status', 'Tier', 'Quota', 'Joined'];
     const rows = users.map(u => [
         u.uid, 
         u.displayName || 'N/A', 
         u.email || 'N/A', 
         u.role, 
         u.status, 
+        u.tier || 'free',
+        u.customQuota || 50,
         u.createdAt?.toDate ? new Date(u.createdAt.toDate()).toLocaleDateString() : 'N/A'
     ]);
     
@@ -459,14 +511,12 @@ function AdminContent() {
   };
 
   if (loading) return <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center font-mono">Loading Portal...</div>;
-  
-  // ✅ AUTH GUARD
   if (!user || !isAdmin) return <Login />;
 
   const filteredUsers = users.filter(u => {
     const matchesSearch = (u.email || '').toLowerCase().includes(search.toLowerCase()) || 
                           (u.displayName || '').toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = filterStatus === 'all' || u.status === filterStatus;
+    const matchesStatus = filterStatus === 'all' || u.status === filterStatus || (filterStatus === 'admin' && u.role === 'admin');
     return matchesSearch && matchesStatus;
   });
 
@@ -502,13 +552,19 @@ function AdminContent() {
               </h1>
               <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest pl-1">Authorized Personnel Only</p>
             </div>
-            {/* Close button for mobile */}
             <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white">
                 <X size={20} />
             </button>
         </div>
         
         <nav className="flex-1 p-4 space-y-2">
+            <button 
+                onClick={() => router.push('/')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all text-white bg-blue-600 hover:bg-blue-500 mb-4"
+            >
+                <Home size={18} /> Return to App
+            </button>
+
             <button 
                 onClick={() => handleSwitchTab('dashboard')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' : 'text-gray-400 hover:bg-white/5'}`}
@@ -542,7 +598,6 @@ function AdminContent() {
         {/* ✅ RESPONSIVE TOP BAR */}
         <header className="h-16 border-b border-white/10 bg-[#09090b]/90 backdrop-blur-md flex items-center justify-between px-4 md:px-8 z-10 shrink-0">
             <div className="flex items-center gap-3">
-                {/* HAMBURGER BUTTON */}
                 <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-gray-400 hover:text-white">
                     <Menu size={20} />
                 </button>
@@ -575,6 +630,7 @@ function AdminContent() {
                                 <option value="approved">Approved</option>
                                 <option value="pending">Pending</option>
                                 <option value="banned">Banned</option>
+                                <option value="admin">Admins</option> {/* ✅ Added Admin Filter */}
                             </select>
                         </div>
                     </div>
@@ -669,6 +725,8 @@ function AdminContent() {
                                     <th className="p-4 pl-6">User</th>
                                     <th className="p-4">Role</th>
                                     <th className="p-4">Status</th>
+                                    <th className="p-4">Tier</th>
+                                    <th className="p-4">Quota</th>
                                     <th className="p-4">Joined</th>
                                     <th className="p-4 text-right pr-6">Controls</th>
                                 </tr>
@@ -676,7 +734,7 @@ function AdminContent() {
                             <tbody className="divide-y divide-white/5">
                                 {filteredUsers.length === 0 && (
                                     <tr>
-                                        <td colSpan={5} className="p-8 text-center text-gray-500 text-sm">
+                                        <td colSpan={7} className="p-8 text-center text-gray-500 text-sm">
                                             No users found matching filters.
                                         </td>
                                     </tr>
@@ -710,28 +768,116 @@ function AdminContent() {
                                                 {u.status}
                                             </span>
                                         </td>
+                                        
+                                        {/* ✅ TIER BADGE */}
+                                        <td className="p-4">
+                                            {u.tier === 'pro' ? (
+                                                <span className="flex items-center gap-1 text-[10px] font-bold text-yellow-400 bg-yellow-900/20 px-2 py-0.5 rounded border border-yellow-500/30">
+                                                    <Crown size={10} fill="currentColor" /> PRO
+                                                </span>
+                                            ) : (
+                                                <span className="text-[10px] font-bold text-gray-400 bg-white/5 px-2 py-0.5 rounded border border-white/10">
+                                                    FREE
+                                                </span>
+                                            )}
+                                        </td>
+
+                                        {/* ✅ QUOTA DISPLAY */}
+                                        <td className="p-4 text-xs text-gray-400 font-mono">
+                                            {u.tier === 'pro' ? '∞' : (u.customQuota || 50)}
+                                        </td>
+
                                         <td className="p-4 text-xs text-gray-500">
                                             {u.createdAt?.toDate ? new Date(u.createdAt.toDate()).toLocaleDateString() : 'Unknown'}
                                         </td>
+                                        
                                         <td className="p-4 text-right pr-6">
                                             <div className="flex items-center justify-end gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
                                                 <button onClick={() => loadUserSessions(u)} className="p-2 text-blue-400 hover:bg-blue-500/10 rounded-md transition-colors" title="View Chat History"><Eye size={16} /></button>
                                                 
-                                                {u.status !== 'approved' && (
-                                                    <button onClick={() => updateUserStatus(u.uid, 'approved')} className="p-2 text-green-400 hover:bg-green-500/10 rounded-md transition-colors" title="Approve"><CheckCircle size={16} /></button>
-                                                )}
-                                                
-                                                {u.status !== 'banned' && u.role !== 'admin' && (
-                                                    <button onClick={() => updateUserStatus(u.uid, 'banned')} className="p-2 text-orange-400 hover:bg-orange-500/10 rounded-md transition-colors" title="Ban User"><Ban size={16} /></button>
-                                                )}
-                                                
-                                                {u.role !== 'admin' && (
-                                                    <button onClick={() => deleteUser(u.uid)} className="p-2 text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Delete User & Data"><Trash2 size={16} /></button>
+                                                {/* ✅ EDIT BUTTON FOR TIER/QUOTA */}
+                                                <button 
+                                                    onClick={() => {
+                                                        if (editingUserId === u.uid) {
+                                                            setEditingUserId(null); // Close
+                                                        } else {
+                                                            setEditingUserId(u.uid);
+                                                            setTempQuota((u.customQuota || 50).toString());
+                                                        }
+                                                    }} 
+                                                    className={`p-2 rounded-md transition-colors ${editingUserId === u.uid ? 'text-white bg-white/10' : 'text-yellow-400 hover:bg-yellow-500/10'}`} 
+                                                    title="Edit Tier & Limits"
+                                                >
+                                                    <Edit3 size={16} />
+                                                </button>
+
+                                                {/* STATUS CONTROLS (Only if not editing) */}
+                                                {editingUserId !== u.uid && (
+                                                    <>
+                                                        {u.status !== 'approved' && (
+                                                            <button onClick={() => updateUserStatus(u.uid, 'approved')} className="p-2 text-green-400 hover:bg-green-500/10 rounded-md transition-colors" title="Approve"><CheckCircle size={16} /></button>
+                                                        )}
+                                                        {u.status !== 'banned' && u.role !== 'admin' && (
+                                                            <button onClick={() => updateUserStatus(u.uid, 'banned')} className="p-2 text-orange-400 hover:bg-orange-500/10 rounded-md transition-colors" title="Ban User"><Ban size={16} /></button>
+                                                        )}
+                                                        {u.role !== 'admin' && (
+                                                            <button onClick={() => deleteUser(u.uid)} className="p-2 text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Delete User & Data"><Trash2 size={16} /></button>
+                                                        )}
+                                                    </>
                                                 )}
                                             </div>
                                         </td>
                                     </tr>
                                 ))}
+                                
+                                {/* ✅ EDIT MODE ROW (Inserted below the user) */}
+                                {editingUserId && (
+                                    <tr className="bg-[#151517] border-b border-white/5 animate-in slide-in-from-top-2">
+                                        <td colSpan={7} className="p-4">
+                                            <div className="flex items-center justify-between gap-4">
+                                                <div className="flex items-center gap-4">
+                                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Editing Limits for User</span>
+                                                    
+                                                    {/* Tier Toggle */}
+                                                    <div className="flex items-center bg-black/30 rounded-lg p-1 border border-white/10">
+                                                        <button 
+                                                            onClick={() => handleUpdateUser(editingUserId, { tier: 'free' })}
+                                                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${users.find(u => u.uid === editingUserId)?.tier !== 'pro' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-white'}`}
+                                                        >
+                                                            FREE
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => handleUpdateUser(editingUserId, { tier: 'pro' })}
+                                                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-1 ${users.find(u => u.uid === editingUserId)?.tier === 'pro' ? 'bg-yellow-600 text-white' : 'text-yellow-600 hover:text-yellow-400'}`}
+                                                        >
+                                                            <Crown size={12} fill="currentColor" /> PRO
+                                                        </button>
+                                                    </div>
+
+                                                    {/* Quota Input */}
+                                                    <div className="flex items-center gap-2">
+                                                        <label className="text-xs text-gray-500">Daily Limit:</label>
+                                                        <input 
+                                                            type="number" 
+                                                            value={tempQuota} 
+                                                            onChange={(e) => setTempQuota(e.target.value)}
+                                                            className="bg-black/30 border border-white/10 rounded px-2 py-1.5 text-xs text-white w-20 focus:outline-none focus:border-blue-500"
+                                                        />
+                                                        <button 
+                                                            onClick={() => handleUpdateUser(editingUserId, { customQuota: parseInt(tempQuota) || 50 })}
+                                                            className="p-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                                                            title="Save Limit"
+                                                        >
+                                                            <Save size={14} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <button onClick={() => setEditingUserId(null)} className="text-xs text-gray-500 hover:text-white">Cancel</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>

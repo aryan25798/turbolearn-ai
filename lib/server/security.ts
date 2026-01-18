@@ -36,12 +36,20 @@ export async function verifyUser(userId: string) {
     throw new Error("User not found");
   }
 
-  const userData = userSnap.data();
+  const rawData = userSnap.data();
 
   // 3. Centralized Access Control Logic
-  if (userData?.status !== 'approved' && userData?.role !== 'admin') {
+  if (rawData?.status !== 'approved' && rawData?.role !== 'admin') {
     throw new Error("Access Denied: Account not approved.");
   }
+
+  // ✅ UPDATE: Apply Defaults for Schema Consistency
+  // This ensures old users without these fields are treated as Free Tier (50 req/day).
+  const userData = {
+    ...rawData,
+    tier: rawData?.tier || 'free',          // Default to 'free' if missing
+    customQuota: rawData?.customQuota ?? 50 // Default to 50 if missing/null
+  };
 
   // 4. Update Cache (Valid for next 60s)
   if (userData) {

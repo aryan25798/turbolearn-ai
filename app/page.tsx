@@ -12,14 +12,14 @@ import 'katex/dist/katex.min.css';
 import { 
   Copy, Check, Terminal, Cpu, Sparkles, Plus, Trash2, LogOut, Menu, X, User as UserIcon, 
   Mic, Volume2, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
-  Clock, ShieldAlert, History, Brain 
+  Clock, ShieldAlert, History, Brain, Crown, Zap // ✅ Added Crown, Zap
 } from 'lucide-react';
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, doc, getDoc, setDoc, updateDoc, Unsubscribe, limit
 } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage'; // ✅ Added getDownloadURL
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import Login from '@/components/Login';
 import CameraModal from '@/components/CameraModal';
 
@@ -39,6 +39,13 @@ type Session = {
   title: string;
   createdAt: any;
   deletedByUser?: boolean;
+};
+
+type QuotaData = {
+  tier: 'free' | 'pro';
+  limit: number | 'Unlimited';
+  remaining: number | 'Unlimited';
+  usage: number;
 };
 
 type UserStatus = 'loading' | 'approved' | 'pending' | 'banned' | 'new';
@@ -164,12 +171,47 @@ const StatusScreen = ({ icon, title, description, subtext, color }: any) => (
   </div>
 );
 
+// ✅ NEW LIMIT EXCEEDED SCREEN
+const LimitExceededScreen = () => (
+  <div className="flex h-[100dvh] w-full items-center justify-center bg-[#050505] p-6 text-center animate-in fade-in zoom-in duration-500">
+    <div className="max-w-md w-full bg-[#0c0c0e] border border-white/10 rounded-2xl p-8 shadow-2xl flex flex-col items-center relative overflow-hidden">
+      <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-red-500 via-orange-500 to-red-500 animate-pulse" />
+      
+      <div className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center mb-6 border border-red-500/20">
+        <ShieldAlert size={40} className="text-red-500" />
+      </div>
+      
+      <h2 className="text-2xl font-bold text-white mb-2">Daily Limit Exhausted</h2>
+      <p className="text-gray-400 text-sm leading-relaxed mb-6">
+        You've used all your free requests for today. 
+        <br/>Upgrade to Pro for unlimited access.
+      </p>
+      
+      <div className="flex gap-3 w-full">
+        <button onClick={() => window.location.reload()} className="flex-1 px-4 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-sm font-medium text-gray-300 transition-colors">
+           Check Again
+        </button>
+        <button onClick={() => signOut(auth)} className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium transition-colors">
+           Sign Out
+        </button>
+      </div>
+      
+      <div className="mt-6 text-[10px] text-gray-600 uppercase tracking-widest">
+         Contact Admin for Premium
+      </div>
+    </div>
+  </div>
+);
+
 // --- MAIN APP ---
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [accountStatus, setAccountStatus] = useState<UserStatus>('loading');
   
+  // ✅ Quota State
+  const [quotaData, setQuotaData] = useState<QuotaData | null>(null);
+
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -222,6 +264,13 @@ export default function Home() {
 
       if (currentUser) {
         setUser(currentUser);
+        
+        // ✅ FETCH QUOTA ON LOAD
+        fetch(`/api/quota?userId=${currentUser.uid}`)
+            .then(res => res.json())
+            .then(data => setQuotaData(data))
+            .catch(err => console.error("Quota fetch failed", err));
+
         const userRef = doc(db, 'users', currentUser.uid);
         
         try {
@@ -234,6 +283,8 @@ export default function Home() {
                     photoURL: currentUser.photoURL,
                     role: 'user', 
                     status: 'pending', 
+                    tier: 'free', 
+                    customQuota: 50,
                     createdAt: serverTimestamp(),
                     lastLogin: serverTimestamp()
                 });
@@ -281,6 +332,7 @@ export default function Home() {
         setUser(null);
         setAccountStatus('loading'); 
         setAuthLoading(false);
+        setQuotaData(null);
       }
     });
 
@@ -455,7 +507,19 @@ export default function Home() {
            }
            return; // Stop execution, do not add text message
         }
+        
+        // ✅ Handle Quota Exceeded (Refresh quota state to trigger block screen)
+        if (response.status === 429 && errorData.code === 'QUOTA_EXCEEDED') {
+            setQuotaData(prev => prev ? { ...prev, remaining: 0 } : null);
+            return;
+        }
       }
+
+      // ✅ Decrement local quota immediately for responsiveness
+      setQuotaData(prev => {
+          if (!prev || prev.remaining === 'Unlimited' || prev.remaining <= 0) return prev;
+          return { ...prev, remaining: prev.remaining - 1, usage: prev.usage + 1 };
+      });
 
       if (!response.body) return;
       const reader = response.body.getReader();
@@ -646,6 +710,11 @@ export default function Home() {
   if (accountStatus === 'banned') return <StatusScreen color="red" icon={<ShieldAlert size={40} className="text-red-500" />} title="Access Revoked" description="Your account has been flagged and banned." subtext="You are currently locked out." />;
   if (accountStatus === 'pending') return <StatusScreen color="yellow" icon={<Clock size={40} className="text-yellow-500 animate-pulse" />} title="Verification Pending" description="Your account is waiting for approval." subtext="Wait here. This page will unlock automatically." />;
 
+  // ✅ CHECK QUOTA LIMIT
+  if (quotaData?.tier !== 'pro' && typeof quotaData?.remaining === 'number' && quotaData.remaining <= 0) {
+      return <LimitExceededScreen />;
+  }
+
   return (
     <div className="flex h-[100dvh] bg-[#131314] text-gray-100 font-sans overflow-hidden selection:bg-purple-500/30 selection:text-white relative">
       
@@ -674,16 +743,45 @@ export default function Home() {
         `}
       >
         <div className="p-4 flex flex-col gap-4 min-w-[280px]">
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={() => setSidebarOpen(false)} 
-              className="p-2 text-gray-400 hover:bg-[#333537] hover:text-white rounded-full transition-colors active:scale-95"
-              title="Close Menu"
-            >
-              <Menu size={20} />
-            </button>
-            <span className="text-sm font-bold text-gray-200 px-2 tracking-wide">TurboLearn</span>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+                <button 
+                onClick={() => setSidebarOpen(false)} 
+                className="p-2 text-gray-400 hover:bg-[#333537] hover:text-white rounded-full transition-colors active:scale-95"
+                title="Close Menu"
+                >
+                <Menu size={20} />
+                </button>
+                <span className="text-sm font-bold text-gray-200 tracking-wide">TurboLearn</span>
+            </div>
+            
+            {/* ✅ TIER BADGE */}
+            {quotaData?.tier === 'pro' ? (
+                <span className="flex items-center gap-1 text-[9px] font-bold bg-yellow-900/20 text-yellow-400 px-2 py-1 rounded border border-yellow-500/30 uppercase tracking-wide">
+                    <Crown size={10} fill="currentColor" /> Pro
+                </span>
+            ) : (
+                <span className="flex items-center gap-1 text-[9px] font-bold bg-white/5 text-gray-400 px-2 py-1 rounded border border-white/10 uppercase tracking-wide">
+                    Free
+                </span>
+            )}
           </div>
+
+          {/* ✅ QUOTA DISPLAY (Only for Free) */}
+          {quotaData && quotaData.tier !== 'pro' && (
+              <div className="mx-2 px-3 py-2 bg-black/20 rounded-lg border border-white/5">
+                  <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] text-gray-400 uppercase font-bold tracking-widest">Daily Limit</span>
+                      <span className="text-[10px] text-white font-mono">{quotaData.remaining}/{quotaData.limit}</span>
+                  </div>
+                  <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                          className="h-full bg-blue-500 transition-all duration-500" 
+                          style={{ width: `${Math.min(100, ((quotaData.usage || 0) / (quotaData.limit as number || 50)) * 100)}%` }} 
+                      />
+                  </div>
+              </div>
+          )}
 
           {userRole === 'admin' && (
              <button 
@@ -708,7 +806,6 @@ export default function Home() {
               <div key={sess.id} onClick={() => selectSession(sess.id)}
                 className={`group flex items-center justify-between px-3 py-2 rounded-full cursor-pointer text-sm transition-all border border-transparent ${currentSessionId === sess.id ? 'bg-[#004a77]/40 text-blue-100 font-medium' : 'text-gray-400 hover:bg-[#282a2c] hover:text-gray-200'}`}>
                 <span className="truncate w-44 text-[13px]">{sess.title}</span>
-                {/* ✅ MOBILE FIX: Always visible on mobile (opacity-100), hover on desktop */}
                 <button 
                     onClick={(e) => deleteSession(e, sess.id)} 
                     className="text-gray-500 hover:text-red-400 p-2 transition-colors opacity-100 lg:opacity-0 lg:group-hover:opacity-100"

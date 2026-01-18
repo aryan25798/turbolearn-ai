@@ -5,7 +5,7 @@ import { adminDb } from '@/lib/firebaseAdmin';
 import { z } from 'zod'; 
 import { verifyUser } from '@/lib/server/security'; 
 import { after } from 'next/server'; 
-import { redis } from '@/lib/redis'; // 🔄 CHANGED: Imported from your new singleton
+import { redis } from '@/lib/redis'; 
 
 // ⚠️ SECURITY: Must be 'nodejs' to use Firebase Admin
 export const runtime = 'nodejs';
@@ -36,33 +36,40 @@ export async function POST(req: Request) {
     
     const { messages, provider, image, userId } = parseResult.data;
 
-    // 2. SECURITY & RATE LIMITING (Redis + Firestore)
+    // 2. SECURITY, TIER CHECK & RATE LIMITING
     try {
-      const rateLimitKey = `rate_limit:${userId}`;
-      const MAX_REQUESTS = 20; 
+      // ✅ Generate Daily Key: Resets automatically at 00:00 UTC (because the date string changes)
+      const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      const dailyUsageKey = `usage:${userId}:${today}`;
 
-      // 🔒 ATOMIC PARALLEL CHECK
-      // We run verifyUser (Firestore) and redis.incr (Redis) simultaneously.
-      // - verifyUser: Checks for bans/auth validity.
-      // - redis.incr: Atomically increments count & returns the NEW value instantly.
-      // This eliminates Race Conditions and reduces latency by ~50%.
+      // 🔒 ATOMIC PARALLEL EXECUTION
+      // We verify the user (Firestore) and increment usage (Redis) simultaneously for max speed.
       const [userData, requestCount] = await Promise.all([
         verifyUser(userId), 
-        redis.incr(rateLimitKey) 
+        redis.incr(dailyUsageKey) 
       ]);
 
-      // 🛑 BLOCKING CHECK: Reject if limit exceeded
-      if (requestCount > MAX_REQUESTS) {
-         return new Response(JSON.stringify({ error: "Too many requests. Please wait a moment." }), { status: 429 });
+      // ✅ TIER LOGIC
+      // Default to 'free' and '50' if fields are missing (backwards compatibility)
+      const userTier = userData.tier || 'free';
+      const dailyLimit = userData.customQuota ?? 50; 
+      const currentUsage = requestCount as number;
+
+      // 🛑 BLOCKING CHECK
+      // Only block if user is NOT 'pro' AND they have exceeded their limit
+      if (userTier !== 'pro' && currentUsage > dailyLimit) {
+         return new Response(JSON.stringify({ 
+             error: "Daily limit exhausted. Upgrade to Pro for unlimited access.",
+             code: "QUOTA_EXCEEDED"
+         }), { status: 429 });
       }
 
       // ⚡️ EXPIRY MANAGEMENT (Background)
-      // If this is the FIRST request in the window (count === 1), set the expiry.
-      // We use 'after' to execute this *after* the response is sent, keeping the API fast.
-      if (requestCount === 1) {
+      // If this is the first request of the day, set the key to expire in 24 hours + buffer
+      if (currentUsage === 1) {
         after(async () => {
            try {
-             await redis.expire(rateLimitKey, 60);
+             await redis.expire(dailyUsageKey, 86400); // 24 Hours
            } catch (e) {
              console.error("Failed to set Redis expiry:", e);
            }
