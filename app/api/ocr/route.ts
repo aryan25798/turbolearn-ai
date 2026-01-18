@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { verifyUser } from '@/lib/server/security'; // ✅ Import Centralized Gatekeeper
+import { verifyUser } from '@/lib/server/security'; // ✅ Centralized Gatekeeper
+import { redis } from '@/lib/redis'; // ✅ Redis Client
+import crypto from 'crypto'; // For hashing images
 
-// ⚠️ SECURITY: Use 'nodejs' runtime for stable database checks
+// ⚠️ SECURITY: Use 'nodejs' runtime for stable database checks & crypto
 export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
@@ -28,7 +30,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'API Key missing' }, { status: 500 });
     }
 
-    // --- 3. PREPARE REQUEST ---
+    // --- 3. CACHE LAYER (De-duplication) ⚡️ ---
+    // We hash the base64 image string to create a unique fingerprint.
+    // If we've seen this exact image before, we return the cached OCR result instantly.
+    let cacheKey = '';
+    try {
+      // Create a fast MD5 hash of the image content
+      const hash = crypto.createHash('md5').update(image).digest('hex');
+      cacheKey = `ocr:${hash}`;
+
+      const cachedResult = await redis.get(cacheKey);
+      if (cachedResult) {
+        console.log("⚡️ OCR Cache Hit");
+        return NextResponse.json(JSON.parse(cachedResult));
+      }
+    } catch (cacheError) {
+      console.warn("⚠️ OCR Cache Read Failed (Proceeding to API):", cacheError);
+    }
+
+    // --- 4. PREPARE GOOGLE VISION REQUEST ---
     const url = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
     const base64Image = image.includes('base64,') 
       ? image.split('base64,')[1] 
@@ -43,7 +63,7 @@ export async function POST(req: Request) {
       ],
     };
 
-    // --- 4. CALL GOOGLE VISION API ---
+    // --- 5. CALL GOOGLE VISION API ---
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -64,7 +84,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ items: [] });
     }
 
-    // --- 5. PROCESS COORDINATES ---
+    // --- 6. PROCESS COORDINATES ---
     let imgWidth = 0;
     let imgHeight = 0;
 
@@ -105,7 +125,21 @@ export async function POST(req: Request) {
       };
     }).filter(Boolean);
 
-    return NextResponse.json({ items });
+    const result = { items };
+
+    // --- 7. SAVE TO CACHE 💾 ---
+    // Store result for 24 hours (86400 seconds)
+    // OCR results for the same image never change, so this is safe.
+    try {
+      if (cacheKey) {
+        // Use 'EX' for ioredis compatibility
+        await redis.set(cacheKey, JSON.stringify(result), 'EX', 86400); 
+      }
+    } catch (writeError) {
+      console.error("⚠️ OCR Cache Write Failed:", writeError);
+    }
+
+    return NextResponse.json(result);
 
   } catch (error: any) {
     console.error('OCR API Error:', error);
