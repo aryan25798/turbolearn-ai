@@ -12,7 +12,7 @@ import 'katex/dist/katex.min.css';
 import { 
   Copy, Check, Terminal, Cpu, Sparkles, Plus, Trash2, LogOut, Menu, X, User as UserIcon, 
   Mic, Volume2, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
-  Clock, ShieldAlert, History, Brain // 👈 Added Brain Icon
+  Clock, ShieldAlert, History, Brain 
 } from 'lucide-react';
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
@@ -29,7 +29,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   image?: string | null;
-  provider?: 'groq' | 'google' | 'deepseek'; // 👈 Added deepseek
+  provider?: 'groq' | 'google' | 'deepseek'; 
   createdAt?: any;
 };
 
@@ -187,6 +187,9 @@ export default function Home() {
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   const [cameraMode, setCameraMode] = useState<'capture' | 'scan' | null>(null);
+
+  // 🔴 Maintenance State
+  const [deepseekError, setDeepseekError] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null); 
@@ -194,14 +197,14 @@ export default function Home() {
   // Data
   const [groqMessages, setGroqMessages] = useState<Message[]>([]);
   const [googleMessages, setGoogleMessages] = useState<Message[]>([]);
-  const [deepseekMessages, setDeepseekMessages] = useState<Message[]>([]); // 👈 DeepSeek State
+  const [deepseekMessages, setDeepseekMessages] = useState<Message[]>([]);
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   const groqEndRef = useRef<HTMLDivElement>(null);
   const googleEndRef = useRef<HTMLDivElement>(null);
-  const deepseekEndRef = useRef<HTMLDivElement>(null); // 👈 DeepSeek Ref
+  const deepseekEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const unsubUserRef = useRef<Unsubscribe | null>(null);
@@ -292,6 +295,7 @@ export default function Home() {
   useEffect(() => {
     if (currentSessionId && user && accountStatus === 'approved') {
       setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
+      setDeepseekError(false); // Reset error on load
       
       const qGroq = query(collection(db, 'chats'), where('sessionId', '==', currentSessionId), where('provider', '==', 'groq'), orderBy('createdAt', 'asc'));
       const unsubGroq = onSnapshot(qGroq, (snapshot) => setGroqMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message))));
@@ -306,6 +310,7 @@ export default function Home() {
       return () => { unsubGroq(); unsubGoogle(); unsubDeepseek(); };
     } else {
       setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
+      setDeepseekError(false);
     }
   }, [currentSessionId, user, accountStatus]);
 
@@ -334,6 +339,7 @@ export default function Home() {
     setCurrentSessionId(null);
     localStorage.removeItem('turboLastSession');
     setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
+    setDeepseekError(false); // ✅ Reset error
     setImage(null);
     stopSpeaking();
     setFocusedProvider(null);
@@ -342,6 +348,7 @@ export default function Home() {
 
   const selectSession = (sessId: string) => {
     setCurrentSessionId(sessId);
+    setDeepseekError(false); // ✅ Reset error
     localStorage.setItem('turboLastSession', sessId);
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
@@ -436,6 +443,20 @@ export default function Home() {
         }),
         signal: signal
       });
+
+      // 🛑 HANDLE MAINTENANCE / ERRORS (Visual Indicator Logic)
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({})); 
+        
+        // Check for specific Maintenance Code or 503
+        if (response.status === 503 || errorData.code === 'DEEPSEEK_MAINTENANCE') {
+           if (provider === 'deepseek') {
+               setDeepseekError(true); // ✅ Activate visual maintenance mode
+           }
+           return; // Stop execution, do not add text message
+        }
+      }
+
       if (!response.body) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -487,6 +508,7 @@ export default function Home() {
     stopSpeaking(); 
     setLoading(true);
     setInput('');
+    setDeepseekError(false); // ✅ Reset maintenance state on new query
     
     const localImageBase64 = image; 
     setImage(null);
@@ -772,7 +794,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* DEEPSEEK CARD */}
+            {/* DEEPSEEK CARD (UPDATED with UI Alert) */}
             {(!focusedProvider || focusedProvider === 'deepseek') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl overflow-hidden transition-all duration-300
                 ${focusedProvider === 'deepseek' ? 'h-full border-purple-500/30 shadow-[0_0_50px_rgba(168,85,247,0.1)]' : 'flex-1 min-h-0'}
@@ -791,8 +813,16 @@ export default function Home() {
                     {focusedProvider === 'deepseek' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                 </div>
-                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5">
-                  {!currentSessionId && deepseekMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Brain size={48} /><span className="text-xs font-medium">Ready</span></div>}
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5 relative">
+                  {/* Ready State (Only if no messages AND no error) */}
+                  {!currentSessionId && deepseekMessages.length === 0 && !deepseekError && (
+                    <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40">
+                      <Brain size={48} />
+                      <span className="text-xs font-medium">Ready</span>
+                    </div>
+                  )}
+
+                  {/* Message List */}
                   {deepseekMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-4 py-3 rounded-2xl rounded-tr-none' : ''}`}>
@@ -802,6 +832,16 @@ export default function Home() {
                       </div>
                     </div>
                   ))}
+
+                  {/* 🔴 VISUAL MAINTENANCE INDICATOR (Not a prompt alert) */}
+                  {deepseekError && (
+                      <div className="mt-4 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex flex-col items-center justify-center text-red-400 animate-in fade-in slide-in-from-bottom-2">
+                           <ShieldAlert size={20} className="mb-2" />
+                           <span className="text-sm font-bold">Under Maintenance</span>
+                           <span className="text-[10px] opacity-70">DeepSeek R1 is currently unavailable.</span>
+                      </div>
+                  )}
+
                   <div ref={deepseekEndRef} />
                 </div>
               </div>
