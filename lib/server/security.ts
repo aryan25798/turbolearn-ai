@@ -2,8 +2,8 @@ import { adminDb } from '@/lib/firebaseAdmin';
 
 // 🚀 CACHE LAYER: Prevents reading Firestore on every request.
 // Stores user data in memory for 60 seconds.
-// This works perfectly in serverless "warm" executions.
-const USER_CACHE = new Map<string, { data: FirebaseFirestore.DocumentData, timestamp: number }>();
+// We use 'any' for data here to allow flexible property access (like .role, .tier) without TS strictness issues.
+const USER_CACHE = new Map<string, { data: any, timestamp: number }>();
 const CACHE_TTL_MS = 60 * 1000; // 1 Minute Cache Duration
 
 export async function verifyUser(userId: string) {
@@ -36,19 +36,20 @@ export async function verifyUser(userId: string) {
     throw new Error("User not found");
   }
 
-  const rawData = userSnap.data();
+  const rawData = userSnap.data() || {};
 
   // 3. Centralized Access Control Logic
   if (rawData?.status !== 'approved' && rawData?.role !== 'admin') {
     throw new Error("Access Denied: Account not approved.");
   }
 
-  // ✅ UPDATE: Apply Defaults for Schema Consistency
-  // This ensures old users without these fields are treated as Free Tier (50 req/day).
-  const userData = {
+  // ✅ UPDATE: Apply Defaults & Type Casting
+  // We explicity cast to 'any' here to fix the TypeScript build error.
+  // This ensures TS knows that 'role', 'tier', etc. are accessible.
+  const userData: any = {
     ...rawData,
-    tier: rawData?.tier || 'free',          // Default to 'free' if missing
-    customQuota: rawData?.customQuota ?? 50 // Default to 50 if missing/null
+    tier: rawData?.tier || 'free',          // Default to 'free'
+    customQuota: rawData?.customQuota ?? 50 // Default to 50
   };
 
   // 4. Update Cache (Valid for next 60s)
