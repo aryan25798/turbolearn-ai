@@ -170,4 +170,8 @@ RULES:
       headers: { 'Content-Type': 'application/json' }
     });
   }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 97835e134bf657a32372295b81e6890b93928271
