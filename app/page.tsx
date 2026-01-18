@@ -906,8 +906,4 @@ export default function Home() {
       </main>
     </div>
   );
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 97835e134bf657a32372295b81e6890b93928271

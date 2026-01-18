@@ -127,41 +127,19 @@ RULES:
       return { role: m.role, content: m.content };
     });
 
-    // 7. Stream Response with Error Handling for DeepSeek Quota
-    try {
-      const result = await streamText({
-        model: model,
-        system: systemPrompt,
-        messages: coreMessages,
-        // DeepSeek R1 requires higher temp (0.6) for reasoning creativity
-        // Gemini/Llama use 0.1 for strict factual accuracy
-        temperature: provider === 'deepseek' ? 0.6 : 0.1, 
-        // DeepSeek R1 outputs a "thinking" trace which needs more token headroom
-        maxOutputTokens: provider === 'deepseek' ? 4000 : 1024, 
-      });
+    // 7. Stream Response
+    const result = await streamText({
+      model: model,
+      system: systemPrompt,
+      messages: coreMessages,
+      // DeepSeek R1 requires higher temp (0.6) for reasoning creativity
+      // Gemini/Llama use 0.1 for strict factual accuracy
+      temperature: provider === 'deepseek' ? 0.6 : 0.1, 
+      // DeepSeek R1 outputs a "thinking" trace which needs more token headroom
+      maxOutputTokens: provider === 'deepseek' ? 4000 : 1024, 
+    });
 
-      return result.toTextStreamResponse();
-
-    } catch (streamError: any) {
-      console.error(`🔥 ${provider} Stream Error:`, streamError);
-
-      // 🔍 DETECT DEEPSEEK QUOTA/MAINTENANCE ERROR
-      // Checks for common API quota error messages or 402 status
-      const isQuotaError = streamError.message?.toLowerCase().includes('balance') || 
-                           streamError.message?.toLowerCase().includes('quota') ||
-                           streamError.message?.toLowerCase().includes('payment') ||
-                           streamError.status === 402;
-
-      if (provider === 'deepseek' && isQuotaError) {
-        return new Response(JSON.stringify({ 
-          error: "DeepSeek API is currently under maintenance (Quota Exceeded).", 
-          code: "DEEPSEEK_MAINTENANCE" 
-        }), { status: 503 });
-      }
-
-      // Rethrow other errors so they hit the main catch block
-      throw streamError;
-    }
+    return result.toTextStreamResponse();
 
   } catch (error) {
     console.error("🔥 AI Error:", error);
@@ -170,8 +148,4 @@ RULES:
       headers: { 'Content-Type': 'application/json' }
     });
   }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 97835e134bf657a32372295b81e6890b93928271
