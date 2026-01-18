@@ -12,7 +12,7 @@ import 'katex/dist/katex.min.css';
 import { 
   Copy, Check, Terminal, Cpu, Sparkles, Plus, Trash2, LogOut, Menu, X, User as UserIcon, 
   Mic, Volume2, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
-  Clock, ShieldAlert, History
+  Clock, ShieldAlert, History, Brain // 👈 Added Brain Icon
 } from 'lucide-react';
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
@@ -29,7 +29,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   image?: string | null;
-  provider?: 'groq' | 'google';
+  provider?: 'groq' | 'google' | 'deepseek'; // 👈 Added deepseek
   createdAt?: any;
 };
 
@@ -175,7 +175,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Focus Mode State
-  const [focusedProvider, setFocusedProvider] = useState<'groq' | 'google' | null>(null);
+  const [focusedProvider, setFocusedProvider] = useState<'groq' | 'google' | 'deepseek' | null>(null);
 
   // User Role State
   const [userRole, setUserRole] = useState<'user' | 'admin' | null>(null);
@@ -194,11 +194,14 @@ export default function Home() {
   // Data
   const [groqMessages, setGroqMessages] = useState<Message[]>([]);
   const [googleMessages, setGoogleMessages] = useState<Message[]>([]);
+  const [deepseekMessages, setDeepseekMessages] = useState<Message[]>([]); // 👈 DeepSeek State
+
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   const groqEndRef = useRef<HTMLDivElement>(null);
   const googleEndRef = useRef<HTMLDivElement>(null);
+  const deepseekEndRef = useRef<HTMLDivElement>(null); // 👈 DeepSeek Ref
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const unsubUserRef = useRef<Unsubscribe | null>(null);
@@ -270,7 +273,7 @@ export default function Home() {
         unsubSessionsRef.current = unsubSessions;
 
       } else {
-        setSessions([]); setGroqMessages([]); setGoogleMessages([]);
+        setSessions([]); setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
         localStorage.removeItem('turboLastSession');
         setUser(null);
         setAccountStatus('loading'); 
@@ -288,14 +291,21 @@ export default function Home() {
   // 2. LOAD CHAT
   useEffect(() => {
     if (currentSessionId && user && accountStatus === 'approved') {
-      setGroqMessages([]); setGoogleMessages([]); 
+      setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
+      
       const qGroq = query(collection(db, 'chats'), where('sessionId', '==', currentSessionId), where('provider', '==', 'groq'), orderBy('createdAt', 'asc'));
       const unsubGroq = onSnapshot(qGroq, (snapshot) => setGroqMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message))));
+      
       const qGoogle = query(collection(db, 'chats'), where('sessionId', '==', currentSessionId), where('provider', '==', 'google'), orderBy('createdAt', 'asc'));
       const unsubGoogle = onSnapshot(qGoogle, (snapshot) => setGoogleMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message))));
-      return () => { unsubGroq(); unsubGoogle(); };
+
+      // 👈 Load DeepSeek Messages
+      const qDeepseek = query(collection(db, 'chats'), where('sessionId', '==', currentSessionId), where('provider', '==', 'deepseek'), orderBy('createdAt', 'asc'));
+      const unsubDeepseek = onSnapshot(qDeepseek, (snapshot) => setDeepseekMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message))));
+
+      return () => { unsubGroq(); unsubGoogle(); unsubDeepseek(); };
     } else {
-      setGroqMessages([]); setGoogleMessages([]);
+      setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
     }
   }, [currentSessionId, user, accountStatus]);
 
@@ -306,6 +316,11 @@ export default function Home() {
   useEffect(() => { 
       if (!focusedProvider || focusedProvider === 'google') googleEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
   }, [googleMessages, focusedProvider]);
+
+  // 👈 DeepSeek Scroll
+  useEffect(() => { 
+      if (!focusedProvider || focusedProvider === 'deepseek') deepseekEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+  }, [deepseekMessages, focusedProvider]);
 
   // --- ACTIONS ---
   const handleLogout = async () => { 
@@ -318,7 +333,7 @@ export default function Home() {
   const startNewChat = () => {
     setCurrentSessionId(null);
     localStorage.removeItem('turboLastSession');
-    setGroqMessages([]); setGoogleMessages([]);
+    setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
     setImage(null);
     stopSpeaking();
     setFocusedProvider(null);
@@ -407,7 +422,7 @@ export default function Home() {
     }
   };
 
-  const streamAnswer = async (provider: 'groq' | 'google', currentHistory: Message[], sessId: string, signal: AbortSignal, imgData: string | null) => {
+  const streamAnswer = async (provider: 'groq' | 'google' | 'deepseek', currentHistory: Message[], sessId: string, signal: AbortSignal, imgData: string | null) => {
     try {
       const apiHistory = currentHistory.map(({ role, content }) => ({ role, content }));
       const response = await fetch('/api/ask', {
@@ -433,7 +448,13 @@ export default function Home() {
         done = doneReading;
         const chunkValue = decoder.decode(value, { stream: true });
         fullResponse += chunkValue;
-        const updateState = provider === 'groq' ? setGroqMessages : setGoogleMessages;
+        
+        // 👈 Update correct state based on provider
+        let updateState;
+        if (provider === 'groq') updateState = setGroqMessages;
+        else if (provider === 'google') updateState = setGoogleMessages;
+        else updateState = setDeepseekMessages;
+
         updateState(prev => {
           const newHistory = [...prev];
           const lastMsg = newHistory[newHistory.length - 1];
@@ -489,10 +510,21 @@ export default function Home() {
     const tempId = 'temp_user_' + Date.now();
     const userMsg: Message = { id: tempId, role: 'user', content: cleanInput, image: localImageBase64, provider: 'google' };
 
-    // Update Local UI instantly
+    // --- 1. LOCAL UI UPDATES ---
+    // If Image -> Only Update Google
+    // If Text -> Update All 3 (unless one is focused)
+    
+    // Google (Always gets it)
     if (!focusedProvider || focusedProvider === 'google') setGoogleMessages(prev => [...prev, userMsg]);
-    if (!localImageBase64 && (!focusedProvider || focusedProvider === 'groq')) {
-        setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
+    
+    // Groq & DeepSeek (Only if NO Image)
+    if (!localImageBase64) {
+        if (!focusedProvider || focusedProvider === 'groq') {
+            setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
+        }
+        if (!focusedProvider || focusedProvider === 'deepseek') {
+            setDeepseekMessages(prev => [...prev, { ...userMsg, provider: 'deepseek' }]);
+        }
     }
 
     // Fire and forget image upload
@@ -503,23 +535,33 @@ export default function Home() {
 
     const promises = [];
 
-    // Save user message
+    // --- 2. FIRESTORE SAVES & STREAMS ---
+    
+    // Save Google User Msg & Start Stream (Always)
     addDoc(collection(db, 'chats'), { 
         sessionId: activeSessionId, role: 'user', content: cleanInput, image: null, provider: 'google', createdAt: serverTimestamp() 
     });
-
-    if (!localImageBase64 && !focusedProvider) {
-        addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() });
+    // If image exists, auto-focus Google if focused on something else that can't handle images
+    if (localImageBase64 && (focusedProvider === 'groq' || focusedProvider === 'deepseek')) {
+        setFocusedProvider('google');
     }
-
+    // Google Stream (Sends Image if exists)
     if (localImageBase64 || !focusedProvider || focusedProvider === 'google') {
         promises.push(streamAnswer('google', [...googleMessages, userMsg], activeSessionId!, controller.signal, localImageBase64));
     }
 
-    if (!localImageBase64 && (!focusedProvider || focusedProvider === 'groq')) {
-        promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
-    } else if (localImageBase64 && focusedProvider === 'groq') {
-       setFocusedProvider('google');
+    // Groq & DeepSeek Logic (SKIP IF IMAGE EXISTS)
+    if (!localImageBase64) {
+        // Groq
+        if (!focusedProvider || focusedProvider === 'groq') {
+            addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() });
+            promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
+        }
+        // DeepSeek
+        if (!focusedProvider || focusedProvider === 'deepseek') {
+            addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'deepseek', createdAt: serverTimestamp() });
+            promises.push(streamAnswer('deepseek', [...deepseekMessages, { ...userMsg, provider: 'deepseek' }], activeSessionId!, controller.signal, null));
+        }
     }
 
     try {
@@ -656,7 +698,7 @@ export default function Home() {
         {/* CHAT SCROLL AREA - Grows to fill remaining space */}
         <div className="flex-1 min-h-0 overflow-hidden p-2 md:p-4 pb-0 pt-0 flex flex-col relative z-0">
           <div className={`w-full h-full max-w-[1800px] mx-auto transition-all duration-300 
-             ${focusedProvider ? 'max-w-4xl' : 'flex flex-col lg:grid lg:grid-cols-2 gap-2 lg:gap-6'}
+             ${focusedProvider ? 'max-w-4xl' : 'flex flex-col lg:grid lg:grid-cols-3 gap-2 lg:gap-6'} 
           `}>
             
             {/* GROQ CARD */}
@@ -729,6 +771,42 @@ export default function Home() {
                 </div>
               </div>
             )}
+
+            {/* DEEPSEEK CARD */}
+            {(!focusedProvider || focusedProvider === 'deepseek') && (
+              <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl overflow-hidden transition-all duration-300
+                ${focusedProvider === 'deepseek' ? 'h-full border-purple-500/30 shadow-[0_0_50px_rgba(168,85,247,0.1)]' : 'flex-1 min-h-0'}
+              `}>
+                <div className="flex items-center justify-between px-4 py-3 bg-[#1e1f20]/95 backdrop-blur-sm border-b border-[#2c2d2e] sticky top-0 z-10">
+                  <div className="flex items-center gap-2">
+                    {focusedProvider === 'deepseek' && <button onClick={() => setFocusedProvider(null)}><ArrowLeft size={18} className="text-gray-400 hover:text-white mr-2" /></button>}
+                    <Brain size={16} className="text-purple-400" />
+                    <span className="font-semibold text-gray-200 text-xs md:text-sm tracking-wide">DeepSeek R1 (Reasoning)</span>
+                  </div>
+                  <button 
+                    onClick={() => setFocusedProvider(focusedProvider === 'deepseek' ? null : 'deepseek')}
+                    className="p-1.5 text-gray-500 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                    title={focusedProvider === 'deepseek' ? "Minimize" : "Focus Mode"}
+                  >
+                    {focusedProvider === 'deepseek' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </div>
+                <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5">
+                  {!currentSessionId && deepseekMessages.length === 0 && <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40"><Brain size={48} /><span className="text-xs font-medium">Ready</span></div>}
+                  {deepseekMessages.map((m, i) => (
+                    <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-4 py-3 rounded-2xl rounded-tr-none' : ''}`}>
+                         <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
+                           {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} msgId={m.id || `deepseek-${i}`} isSpeaking={speakingMessageId === (m.id || `deepseek-${i}`)} onToggleSpeak={toggleSpeak} />}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={deepseekEndRef} />
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
 
@@ -752,7 +830,7 @@ export default function Home() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={isListening ? "Listening..." : focusedProvider ? `Talk to ${focusedProvider === 'groq' ? 'Llama' : 'Gemini'}...` : "Ask anything..."}
+                placeholder={isListening ? "Listening..." : focusedProvider ? `Talk to ${focusedProvider === 'groq' ? 'Llama' : focusedProvider === 'deepseek' ? 'DeepSeek' : 'Gemini'}...` : "Ask anything..."}
                 className={`w-full bg-[#1e1f20] text-gray-100 placeholder-gray-500 rounded-full py-3 md:py-4 pl-12 md:pl-14 pr-36 md:pr-40 
                   focus:outline-none focus:ring-1 focus:ring-white/10 focus:bg-[#2c2d2e]
                   transition-all text-[15px] border border-[#2c2d2e] shadow-lg hover:shadow-xl
