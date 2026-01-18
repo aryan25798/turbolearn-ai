@@ -1,34 +1,41 @@
 import { adminDb } from '@/lib/firebaseAdmin';
+import { redis } from '@/lib/redis'; // ✅ Uses the shared TCP client from lib/redis.ts
 
-// 🚀 CACHE LAYER: Prevents reading Firestore on every request.
-// Stores user data in memory for 60 seconds.
-// We use 'any' for data here to allow flexible property access (like .role, .tier) without TS strictness issues.
-const USER_CACHE = new Map<string, { data: any, timestamp: number }>();
-const CACHE_TTL_MS = 60 * 1000; // 1 Minute Cache Duration
+// 🚀 CACHE LAYER
+// Stores user data in Redis for 60 seconds to prevent hitting Firestore on every request.
+// This reduces latency from ~300ms (Firestore) to ~5ms (Redis).
+const CACHE_TTL_SECONDS = 60; 
 
 export async function verifyUser(userId: string) {
   if (!userId) {
     throw new Error("Unauthorized: No User ID");
   }
 
-  // 1. FAST PATH: Check Cache ⚡️
-  const now = Date.now();
-  const cached = USER_CACHE.get(userId);
-  
-  // If we have data and it's less than 60 seconds old, use it.
-  if (cached && (now - cached.timestamp < CACHE_TTL_MS)) {
-    const userData = cached.data;
-    
-    // Verify permissions using cached data
-    if (userData?.status !== 'approved' && userData?.role !== 'admin') {
-       throw new Error("Access Denied: Account not approved.");
+  const cacheKey = `user_profile:${userId}`;
+
+  // 1. FAST PATH: Check Redis Cache ⚡️
+  try {
+    const cachedString = await redis.get(cacheKey);
+
+    if (cachedString) {
+      const userData = JSON.parse(cachedString);
+
+      // Verify permissions using cached data
+      // This runs instantly without touching the database
+      if (userData?.status !== 'approved' && userData?.role !== 'admin') {
+         throw new Error("Access Denied: Account not approved.");
+      }
+
+      return userData; // Return instantly (Low latency)
     }
-    
-    return userData; // Return instantly (0ms latency, $0 cost)
+  } catch (error) {
+    // Non-blocking: If Redis fails, just log it and fall back to Firestore.
+    // We use console.warn so it doesn't clutter production error logs too much.
+    console.warn("⚠️ Redis Cache Read Failed:", error);
   }
 
   // 2. SLOW PATH: Fetch from Firestore 🐢
-  // We only do this once per minute per user (per container)
+  // Only runs if cache is missing (expired or first visit)
   const userRef = adminDb.collection('users').doc(userId);
   const userSnap = await userRef.get();
 
@@ -44,17 +51,21 @@ export async function verifyUser(userId: string) {
   }
 
   // ✅ UPDATE: Apply Defaults & Type Casting
-  // We explicity cast to 'any' here to fix the TypeScript build error.
-  // This ensures TS knows that 'role', 'tier', etc. are accessible.
+  // We explicitly cast to 'any' to allow flexible property access (tier, role, etc.)
+  // This ensures the rest of your app can access userData.tier without TS errors.
   const userData: any = {
     ...rawData,
     tier: rawData?.tier || 'free',          // Default to 'free'
     customQuota: rawData?.customQuota ?? 50 // Default to 50
   };
 
-  // 4. Update Cache (Valid for next 60s)
-  if (userData) {
-      USER_CACHE.set(userId, { data: userData, timestamp: now });
+  // 4. Update Redis Cache (Valid for 60s)
+  try {
+      // ⚠️ CRITICAL: We use the 'EX' syntax here because we are using 'ioredis'.
+      // This sets the key to expire automatically in 60 seconds.
+      await redis.set(cacheKey, JSON.stringify(userData), 'EX', CACHE_TTL_SECONDS);
+  } catch (error) {
+      console.error("⚠️ Failed to update Redis cache:", error);
   }
 
   return userData;

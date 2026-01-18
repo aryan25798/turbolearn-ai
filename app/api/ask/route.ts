@@ -10,6 +10,20 @@ import { redis } from '@/lib/redis';
 // ⚠️ SECURITY: Must be 'nodejs' to use Firebase Admin
 export const runtime = 'nodejs';
 
+// 📝 CONFIGURATION: System Prompts
+// Moved here for easier updates/hotfixing. ideally fetch from DB/Remote Config.
+const PROMPTS = {
+  ACADEMIC: `
+You are TurboLearn AI, an elite academic engine.
+RULES:
+1. **Direct Answer**: Output the final answer immediately. No filler words.
+2. **Concise**: Use bullet points. Keep it punchy.
+3. **Format**: Use Markdown. **Bold** key terms. LaTeX for math ($x^2$).
+4. **Context**: If an image is present, treat it as the primary source.
+`,
+  REASONING: "You are a helpful academic assistant. Answer directly and concisely using Markdown."
+};
+
 // ✅ Validation Schema
 const AskSchema = z.object({
   messages: z.array(z.object({
@@ -38,25 +52,23 @@ export async function POST(req: Request) {
 
     // 2. SECURITY, TIER CHECK & RATE LIMITING
     try {
-      // ✅ Generate Daily Key: Resets automatically at 00:00 UTC (because the date string changes)
       const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
       const dailyUsageKey = `usage:${userId}:${today}`;
 
-      // 🔒 ATOMIC PARALLEL EXECUTION
-      // We verify the user (Firestore) and increment usage (Redis) simultaneously for max speed.
-      const [userData, requestCount] = await Promise.all([
-        verifyUser(userId), 
-        redis.incr(dailyUsageKey) 
-      ]);
+      // 🔒 SEQUENTIAL EXECUTION (Fixes Race Condition)
+      // We verify the user FIRST. If they are banned/unauthorized, we do NOT increment the counter.
+      // This prevents malicious users from inflating the Redis keyspace.
+      const userData = await verifyUser(userId); 
+      
+      // Only increment if verification passed
+      const requestCount = await redis.incr(dailyUsageKey);
 
       // ✅ TIER LOGIC
-      // Default to 'free' and '50' if fields are missing (backwards compatibility)
       const userTier = userData.tier || 'free';
       const dailyLimit = userData.customQuota ?? 50; 
       const currentUsage = requestCount as number;
 
       // 🛑 BLOCKING CHECK
-      // Only block if user is NOT 'pro' AND they have exceeded their limit
       if (userTier !== 'pro' && currentUsage > dailyLimit) {
          return new Response(JSON.stringify({ 
              error: "Daily limit exhausted. Upgrade to Pro for unlimited access.",
@@ -65,7 +77,6 @@ export async function POST(req: Request) {
       }
 
       // ⚡️ EXPIRY MANAGEMENT (Background)
-      // If this is the first request of the day, set the key to expire in 24 hours + buffer
       if (currentUsage === 1) {
         after(async () => {
            try {
@@ -84,14 +95,7 @@ export async function POST(req: Request) {
 
     // 3. Model Selection
     let model;
-    let systemPrompt = `
-You are TurboLearn AI, an elite academic engine.
-RULES:
-1. **Direct Answer**: Output the final answer immediately. No filler words.
-2. **Concise**: Use bullet points. Keep it punchy.
-3. **Format**: Use Markdown. **Bold** key terms. LaTeX for math ($x^2$).
-4. **Context**: If an image is present, treat it as the primary source.
-`;
+    let systemPrompt = PROMPTS.ACADEMIC;
 
     if (provider === 'google') {
       model = google('gemini-2.5-flash'); 
@@ -100,7 +104,7 @@ RULES:
     } else if (provider === 'deepseek') {
       // ✅ "DEEPSEEK" ROUTE -> Uses Gemini 2.0 Flash (Reasoning Model)
       model = google('gemini-2.0-flash-exp'); 
-      systemPrompt = "You are a helpful academic assistant. Answer directly and concisely using Markdown.";
+      systemPrompt = PROMPTS.REASONING;
     } else {
       return new Response('Invalid provider', { status: 400 });
     }
@@ -111,50 +115,50 @@ RULES:
         ? messages.slice(-MAX_CONTEXT_WINDOW) 
         : messages;
 
-    // 6. MESSAGE SANITIZATION
-    const coreMessages = recentMessages.map((m: any, index: number) => {
-      
-      let finalContent = m.content;
+    // 6. MESSAGE SANITIZATION & FILTERING
+    // Fix: We now filter out empty messages entirely to prevent LLM hallucinations.
+    const coreMessages = recentMessages
+      .map((m: any, index: number) => {
+        let finalContent = m.content;
 
-      // CASE A: GOOGLE / DEEPSEEK (Multimodal Support)
-      if (provider === 'google' || provider === 'deepseek') {
-        if (index === recentMessages.length - 1 && m.role === 'user' && image) {
-          const userText = Array.isArray(m.content) 
-            ? m.content.map((c: any) => c.text || '').join('') 
-            : m.content;
-            
-          return {
-            role: 'user',
-            content: [
-              { type: 'text', text: userText || ' ' }, 
-              { type: 'image', image: image } 
-            ]
-          };
-        }
-      } else {
+        // CASE A: GOOGLE / DEEPSEEK (Multimodal Support)
+        if (provider === 'google' || provider === 'deepseek') {
+          if (index === recentMessages.length - 1 && m.role === 'user' && image) {
+            const userText = Array.isArray(m.content) 
+              ? m.content.map((c: any) => c.text || '').join('') 
+              : m.content;
+              
+            return {
+              role: 'user',
+              content: [
+                { type: 'text', text: userText || ' ' }, // Ensure at least one text part exists
+                { type: 'image', image: image } 
+              ]
+            };
+          }
+        } 
         // CASE B: GROQ (Strict Text-Only)
-        if (Array.isArray(m.content)) {
-          finalContent = m.content
-            .filter((c: any) => c.type === 'text')
-            .map((c: any) => c.text || '')
-            .join('\n');
+        else {
+          if (Array.isArray(m.content)) {
+            finalContent = m.content
+              .filter((c: any) => c.type === 'text')
+              .map((c: any) => c.text || '')
+              .join('\n');
+          }
         }
-      }
 
-      // 🛑 FINAL SAFETY CHECK
-      if (
-        !finalContent || 
-        (typeof finalContent === 'string' && finalContent.trim() === '') || 
-        (Array.isArray(finalContent) && finalContent.length === 0)
-      ) {
-        finalContent = ' '; 
-      }
-
-      return {
-        role: m.role,
-        content: finalContent
-      };
-    });
+        return {
+          role: m.role,
+          content: finalContent
+        };
+      })
+      .filter((m: any) => {
+        // 🗑️ FILTER: Remove messages that are empty or whitespace only
+        if (!m.content) return false;
+        if (typeof m.content === 'string' && m.content.trim() === '') return false;
+        if (Array.isArray(m.content) && m.content.length === 0) return false;
+        return true;
+      });
 
     // 7. Stream Response
     try {
