@@ -19,7 +19,7 @@ import { signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, doc, getDoc, setDoc, updateDoc, Unsubscribe, limit
 } from 'firebase/firestore';
-import { ref, uploadString } from 'firebase/storage';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage'; // ✅ Added getDownloadURL
 import Login from '@/components/Login';
 import CameraModal from '@/components/CameraModal';
 
@@ -530,66 +530,108 @@ export default function Home() {
     }
 
     const tempId = 'temp_user_' + Date.now();
-    const userMsg: Message = { id: tempId, role: 'user', content: cleanInput, image: localImageBase64, provider: 'google' };
-
-    // --- 1. LOCAL UI UPDATES ---
-    // If Image -> Only Update Google
-    // If Text -> Update All 3 (unless one is focused)
     
+    // ✅ 1. UI UPDATE: Show text + image immediately in chat bubble (Using RAM Base64)
+    const userMsg: Message = { 
+        id: tempId, 
+        role: 'user', 
+        content: cleanInput, 
+        image: localImageBase64, // Instant Preview
+        provider: 'google' 
+    };
+
     // Google (Always gets it)
     if (!focusedProvider || focusedProvider === 'google') setGoogleMessages(prev => [...prev, userMsg]);
     
-    // Groq & DeepSeek (Only if NO Image)
+    // ✅ DeepSeek (Now also gets it!)
+    if (!focusedProvider || focusedProvider === 'deepseek') {
+        setDeepseekMessages(prev => [...prev, { ...userMsg, provider: 'deepseek' }]);
+    }
+    
+    // Groq (Only if NO Image)
     if (!localImageBase64) {
         if (!focusedProvider || focusedProvider === 'groq') {
             setGroqMessages(prev => [...prev, { ...userMsg, provider: 'groq' }]);
         }
-        if (!focusedProvider || focusedProvider === 'deepseek') {
-            setDeepseekMessages(prev => [...prev, { ...userMsg, provider: 'deepseek' }]);
-        }
     }
 
-    // Fire and forget image upload
-    if (localImageBase64) {
-      const storageRef = ref(storage, `chat-images/${user.uid}/${activeSessionId}/${Date.now()}.jpg`);
-      uploadString(storageRef, localImageBase64, 'data_url').catch(err => console.error("Image upload failed:", err));
-    }
+    // ✅ 2. HYBRID UPLOAD STRATEGY
+    // We start the "Fire and Forget" API call using base64 (RAM) for speed.
+    // Simultaneously, we upload to Storage to get the URL for history (Persistence).
+    
+    // A. Start Upload Promise (Background)
+    const uploadPromise = (async () => {
+        if (!localImageBase64) return null;
+        try {
+            const storageRef = ref(storage, `chat-images/${user.uid}/${activeSessionId}/${Date.now()}.jpg`);
+            await uploadString(storageRef, localImageBase64, 'data_url');
+            const url = await getDownloadURL(storageRef);
+            return url;
+        } catch (err) {
+            console.error("Image upload failed:", err);
+            return null;
+        }
+    })();
 
     const promises = [];
 
-    // --- 2. FIRESTORE SAVES & STREAMS ---
-    
-    // Save Google User Msg & Start Stream (Always)
-    addDoc(collection(db, 'chats'), { 
-        sessionId: activeSessionId, role: 'user', content: cleanInput, image: null, provider: 'google', createdAt: serverTimestamp() 
-    });
-    // If image exists, auto-focus Google if focused on something else that can't handle images
-    if (localImageBase64 && (focusedProvider === 'groq' || focusedProvider === 'deepseek')) {
+    // B. Save User Message to Firestore (Wait for upload if image exists)
+    // We put this in the promise array so we don't block the API call start,
+    // but we ensure it runs.
+    promises.push(
+        uploadPromise.then((downloadUrl) => {
+            // Save to Google History
+            addDoc(collection(db, 'chats'), { 
+                sessionId: activeSessionId, role: 'user', content: cleanInput, 
+                image: downloadUrl, // ✅ Save URL, not Base64!
+                provider: 'google', createdAt: serverTimestamp() 
+            });
+
+            // Save to DeepSeek History (if image exists or selected)
+            if (localImageBase64 || (!focusedProvider || focusedProvider === 'deepseek')) {
+                 addDoc(collection(db, 'chats'), { 
+                    sessionId: activeSessionId, role: 'user', content: cleanInput, 
+                    image: downloadUrl, // ✅ Save URL here too!
+                    provider: 'deepseek', createdAt: serverTimestamp() 
+                });
+            }
+
+            // Save to Groq History (Only if no image)
+            if (!localImageBase64 && (!focusedProvider || focusedProvider === 'groq')) {
+                addDoc(collection(db, 'chats'), { 
+                    sessionId: activeSessionId, role: 'user', content: cleanInput, 
+                    provider: 'groq', createdAt: serverTimestamp() 
+                });
+            }
+        })
+    );
+
+    // If image exists, auto-focus Google if currently focused on Groq (which can't handle it)
+    if (localImageBase64 && focusedProvider === 'groq') {
         setFocusedProvider('google');
     }
-    // Google Stream (Sends Image if exists)
+
+    // C. Start API Streams (Using Base64 for Speed)
+    
+    // Google Stream
     if (localImageBase64 || !focusedProvider || focusedProvider === 'google') {
         promises.push(streamAnswer('google', [...googleMessages, userMsg], activeSessionId!, controller.signal, localImageBase64));
     }
 
-    // Groq & DeepSeek Logic (SKIP IF IMAGE EXISTS)
-    if (!localImageBase64) {
-        // Groq
-        if (!focusedProvider || focusedProvider === 'groq') {
-            addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'groq', createdAt: serverTimestamp() });
-            promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
-        }
-        // DeepSeek
-        if (!focusedProvider || focusedProvider === 'deepseek') {
-            addDoc(collection(db, 'chats'), { sessionId: activeSessionId, role: 'user', content: cleanInput, provider: 'deepseek', createdAt: serverTimestamp() });
-            promises.push(streamAnswer('deepseek', [...deepseekMessages, { ...userMsg, provider: 'deepseek' }], activeSessionId!, controller.signal, null));
-        }
+    // DeepSeek Stream (✅ NOW INCLUDES IMAGE SUPPORT)
+    if (localImageBase64 || !focusedProvider || focusedProvider === 'deepseek') {
+        promises.push(streamAnswer('deepseek', [...deepseekMessages, { ...userMsg, provider: 'deepseek' }], activeSessionId!, controller.signal, localImageBase64));
+    }
+
+    // Groq Stream (Text Only)
+    if (!localImageBase64 && (!focusedProvider || focusedProvider === 'groq')) {
+        promises.push(streamAnswer('groq', [...groqMessages, { ...userMsg, provider: 'groq' }], activeSessionId!, controller.signal, null));
     }
 
     try {
         await Promise.all(promises);
     } catch (err) {
-        console.error("Stream error", err);
+        console.error("Stream/Upload error", err);
     } finally {
         setLoading(false); 
         abortControllerRef.current = null;
@@ -617,7 +659,7 @@ export default function Home() {
         />
       )}
 
-      {/* MOBILE OVERLAY (BACKDROP) */}
+      {/* MOBILE OVERLAY */}
       {sidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm transition-opacity"
@@ -689,7 +731,6 @@ export default function Home() {
       </aside>
 
       {/* MAIN CONTENT */}
-      {/* ✅ FLEX LAYOUT: Solves overlap issues */}
       <main className="flex-1 flex flex-col h-[100dvh] relative bg-[#131314] w-full min-w-0 transition-all duration-300">
         
         {/* HEADER */}
@@ -703,7 +744,6 @@ export default function Home() {
             </button>
           </div>
 
-          {/* ✅ STYLISH TITLE in Empty Header Space */}
           <div className="absolute left-1/2 transform -translate-x-1/2 font-bold text-lg md:text-2xl tracking-tighter bg-gradient-to-r from-blue-400 via-purple-400 to-orange-400 bg-clip-text text-transparent select-none pointer-events-none">
             TurboLearn AI
           </div>
@@ -717,7 +757,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* CHAT SCROLL AREA - Grows to fill remaining space */}
+        {/* CHAT SCROLL AREA */}
         <div className="flex-1 min-h-0 overflow-hidden p-2 md:p-4 pb-0 pt-0 flex flex-col relative z-0">
           <div className={`w-full h-full max-w-[1800px] mx-auto transition-all duration-300 
              ${focusedProvider ? 'max-w-4xl' : 'flex flex-col lg:grid lg:grid-cols-3 gap-2 lg:gap-6'} 
@@ -794,7 +834,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* DEEPSEEK CARD (UPDATED with UI Alert) */}
+            {/* DEEPSEEK CARD (UPDATED with Image Support) */}
             {(!focusedProvider || focusedProvider === 'deepseek') && (
               <div className={`flex flex-col rounded-2xl bg-[#1e1f20] border border-[#2c2d2e] shadow-xl overflow-hidden transition-all duration-300
                 ${focusedProvider === 'deepseek' ? 'h-full border-purple-500/30 shadow-[0_0_50px_rgba(168,85,247,0.1)]' : 'flex-1 min-h-0'}
@@ -814,7 +854,6 @@ export default function Home() {
                   </button>
                 </div>
                 <div className="flex-1 p-3 md:p-5 overflow-y-auto custom-scrollbar pb-5 relative">
-                  {/* Ready State (Only if no messages AND no error) */}
                   {!currentSessionId && deepseekMessages.length === 0 && !deepseekError && (
                     <div className="h-full flex flex-col gap-2 items-center justify-center text-gray-700 opacity-40">
                       <Brain size={48} />
@@ -822,10 +861,11 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Message List */}
                   {deepseekMessages.map((m, i) => (
                     <div key={i} className={`mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[95%] md:max-w-[90%] ${m.role === 'user' ? 'bg-[#2c2d2e] px-4 py-3 rounded-2xl rounded-tr-none' : ''}`}>
+                         {/* ✅ ADDED IMAGE RENDERER HERE */}
+                         {m.image && (<div className="mb-3"><img src={m.image} alt="Upload" className="max-h-48 rounded-lg border border-[#3c3d3e] object-contain bg-black/50" /></div>)}
                          <div className="prose prose-invert max-w-none text-gray-100 text-sm leading-relaxed break-words">
                            {m.role === 'user' ? <p>{m.content}</p> : <MarkdownRenderer content={m.content} msgId={m.id || `deepseek-${i}`} isSpeaking={speakingMessageId === (m.id || `deepseek-${i}`)} onToggleSpeak={toggleSpeak} />}
                         </div>
@@ -833,7 +873,6 @@ export default function Home() {
                     </div>
                   ))}
 
-                  {/* 🔴 VISUAL MAINTENANCE INDICATOR (Not a prompt alert) */}
                   {deepseekError && (
                       <div className="mt-4 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex flex-col items-center justify-center text-red-400 animate-in fade-in slide-in-from-bottom-2">
                            <ShieldAlert size={20} className="mb-2" />
@@ -850,8 +889,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* INPUT AREA - Sticky Footer (Not Fixed) */}
-        {/* ✅ FIX: Removes overlap by being a flex item */}
+        {/* INPUT AREA */}
         <div className="flex-none w-full p-3 md:p-6 bg-[#131314] z-20 border-t border-white/5">
           <div className={`mx-auto relative transition-all duration-300 ${focusedProvider ? 'max-w-3xl' : 'max-w-4xl'}`}>
             
@@ -864,7 +902,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Input Form */}
             <form onSubmit={handleSearch} className="relative group">
               <input
                 type="text"
@@ -878,13 +915,11 @@ export default function Home() {
                 style={{ fontSize: '16px' }} 
               />
               
-              {/* LEFT ACTIONS (Media) */}
               <div className="absolute left-2 top-2 bottom-2 flex items-center gap-0 md:gap-1 rounded-full px-1">
                 <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10" title="Upload Image"><Plus size={20} /></button>
                 <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
               </div>
 
-              {/* RIGHT ACTIONS (Voice/Send) */}
               <div className="absolute right-2 top-2 bottom-2 flex items-center gap-1 md:gap-2">
                  <button type="button" onClick={() => setCameraMode('scan')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10" title="Scan Text"><ScanText size={18} /></button>
                  <button type="button" onClick={() => setCameraMode('capture')} className="p-1.5 md:p-2 text-gray-400 hover:text-white rounded-full transition-colors hover:bg-white/10" title="Camera"><Camera size={18} /></button>

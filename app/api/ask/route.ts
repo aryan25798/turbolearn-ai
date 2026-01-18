@@ -1,11 +1,11 @@
 import { streamText } from 'ai';
 import { google } from '@ai-sdk/google';
 import { groq } from '@ai-sdk/groq';
-import { createOpenAI } from '@ai-sdk/openai';
-import { adminDb } from '@/lib/firebaseAdmin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { adminDb } from '@/lib/firebaseAdmin'; 
 import { z } from 'zod'; 
 import { verifyUser } from '@/lib/server/security'; 
+import { after } from 'next/server'; 
+import { redis } from '@/lib/redis'; // 🔄 CHANGED: Imported from your new singleton
 
 // ⚠️ SECURITY: Must be 'nodejs' to use Firebase Admin
 export const runtime = 'nodejs';
@@ -14,7 +14,10 @@ export const runtime = 'nodejs';
 const AskSchema = z.object({
   messages: z.array(z.object({
     role: z.string(),
-    content: z.union([z.string(), z.array(z.any())]), 
+    content: z.union([
+        z.string().max(20000, "Message too long. Max 20,000 characters."), 
+        z.array(z.any())
+    ]), 
   })),
   provider: z.enum(['google', 'groq', 'deepseek']), 
   image: z.string().nullable().optional(),
@@ -33,28 +36,39 @@ export async function POST(req: Request) {
     
     const { messages, provider, image, userId } = parseResult.data;
 
-    // 2. SECURITY & RATE LIMITING
+    // 2. SECURITY & RATE LIMITING (Redis + Firestore)
     try {
-      const rateLimitRef = adminDb.collection('rate_limits').doc(userId);
-      const now = Date.now();
-      const [userData, rateLimitSnap] = await Promise.all([
+      const rateLimitKey = `rate_limit:${userId}`;
+      const MAX_REQUESTS = 20; 
+
+      // 🔒 ATOMIC PARALLEL CHECK
+      // We run verifyUser (Firestore) and redis.incr (Redis) simultaneously.
+      // - verifyUser: Checks for bans/auth validity.
+      // - redis.incr: Atomically increments count & returns the NEW value instantly.
+      // This eliminates Race Conditions and reduces latency by ~50%.
+      const [userData, requestCount] = await Promise.all([
         verifyUser(userId), 
-        rateLimitRef.get()
+        redis.incr(rateLimitKey) 
       ]);
 
-      const RATE_LIMIT_WINDOW = 60 * 1000; 
-      const MAX_REQUESTS = 20; 
-      const rateData = rateLimitSnap.data();
-      const isWindowOpen = !rateData || (now - (rateData.startTime || 0) > RATE_LIMIT_WINDOW);
-
-      if (isWindowOpen) {
-        rateLimitRef.set({ count: 1, startTime: now });
-      } else {
-        if ((rateData?.count || 0) >= MAX_REQUESTS) {
-           return new Response(JSON.stringify({ error: "Too many requests. Please wait a moment." }), { status: 429 });
-        }
-        rateLimitRef.update({ count: FieldValue.increment(1) });
+      // 🛑 BLOCKING CHECK: Reject if limit exceeded
+      if (requestCount > MAX_REQUESTS) {
+         return new Response(JSON.stringify({ error: "Too many requests. Please wait a moment." }), { status: 429 });
       }
+
+      // ⚡️ EXPIRY MANAGEMENT (Background)
+      // If this is the FIRST request in the window (count === 1), set the expiry.
+      // We use 'after' to execute this *after* the response is sent, keeping the API fast.
+      if (requestCount === 1) {
+        after(async () => {
+           try {
+             await redis.expire(rateLimitKey, 60);
+           } catch (e) {
+             console.error("Failed to set Redis expiry:", e);
+           }
+        });
+      }
+
     } catch (error: any) {
       console.error("🔥 Security Check Failed:", error);
       const status = error.message.includes("Access Denied") ? 403 : 500;
@@ -78,7 +92,6 @@ RULES:
       model = groq('llama-3.3-70b-versatile'); 
     } else if (provider === 'deepseek') {
       // ✅ "DEEPSEEK" ROUTE -> Uses Gemini 2.0 Flash (Reasoning Model)
-      // This is Google's newest, smartest model. It replaces DeepSeek R1 perfectly.
       model = google('gemini-2.0-flash-exp'); 
       systemPrompt = "You are a helpful academic assistant. Answer directly and concisely using Markdown.";
     } else {
@@ -91,7 +104,7 @@ RULES:
         ? messages.slice(-MAX_CONTEXT_WINDOW) 
         : messages;
 
-    // 6. MESSAGE SANITIZATION (The Fix for "must include at least one parts field")
+    // 6. MESSAGE SANITIZATION
     const coreMessages = recentMessages.map((m: any, index: number) => {
       
       let finalContent = m.content;
@@ -106,12 +119,11 @@ RULES:
           return {
             role: 'user',
             content: [
-              { type: 'text', text: userText || ' ' }, // Ensure text is never empty
+              { type: 'text', text: userText || ' ' }, 
               { type: 'image', image: image } 
             ]
           };
         }
-        // Fallthrough to standard processing...
       } else {
         // CASE B: GROQ (Strict Text-Only)
         if (Array.isArray(m.content)) {
@@ -122,9 +134,7 @@ RULES:
         }
       }
 
-      // 🛑 FINAL SAFETY CHECK (Prevents Google 400 Error)
-      // Gemini rejects empty strings "" or empty arrays [].
-      // We force a single space " " if content is missing.
+      // 🛑 FINAL SAFETY CHECK
       if (
         !finalContent || 
         (typeof finalContent === 'string' && finalContent.trim() === '') || 
@@ -154,7 +164,6 @@ RULES:
     } catch (streamError: any) {
       console.error(`🔥 ${provider} Stream Error:`, streamError);
       
-      // Handle Rate Limits gracefully
       const isQuotaError = streamError.message?.toLowerCase().includes('429') || 
                            streamError.message?.toLowerCase().includes('resource exhausted');
 

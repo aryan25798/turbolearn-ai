@@ -2,7 +2,7 @@
 // ✅ Keep this to force dynamic rendering
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, Suspense } from 'react'; // ✅ Added Suspense
+import { useState, useEffect, Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math'; 
@@ -14,7 +14,8 @@ import 'katex/dist/katex.min.css';
 import { 
   Users, MessageSquare, CheckCircle, Trash2, Search, LogOut, 
   Ban, Eye, X, Shield, ImageIcon, Terminal, Clock, 
-  BarChart3, Download, Filter, AlertCircle, Activity, Copy, Archive, Loader2, ChevronDown
+  BarChart3, Download, Filter, AlertCircle, Activity, Copy, Archive, Loader2, ChevronDown,
+  Menu, ArrowLeft // ✅ Added Menu and ArrowLeft for responsiveness
 } from 'lucide-react';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -109,14 +110,18 @@ const AdminMarkdownRenderer = ({ content }: { content: string }) => {
   );
 };
 
-// ⚠️ MAIN LOGIC MOVED INTO A SEPARATE COMPONENT
+// ⚠️ MAIN LOGIC COMPONENT
 function AdminContent() {
   const [user, setUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [processingAction, setProcessingAction] = useState(false); 
+  
+  // ✅ Responsive State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
   const router = useRouter();
-  const searchParams = useSearchParams(); // ✅ Safe to use here now
+  const searchParams = useSearchParams();
 
   // Admin Data with Pagination
   const [users, setUsers] = useState<UserData[]>([]);
@@ -151,53 +156,56 @@ function AdminContent() {
       if (currentUser) {
         const docRef = doc(db, 'users', currentUser.uid);
         onSnapshot(docRef, async (docSnap) => {
-             const data = docSnap.data();
-             if (data && data.role === 'admin') {
-                 setUser(currentUser);
-                 setIsAdmin(true);
-                 
-                 // --- RESTORE STATE FROM URL ---
-                 const tabParam = searchParams.get('tab');
-                 const uidParam = searchParams.get('uid');
-                 const sessionParam = searchParams.get('sessionId');
+              const data = docSnap.data();
+              if (data && data.role === 'admin') {
+                  setUser(currentUser);
+                  setIsAdmin(true);
+                  
+                  // --- RESTORE STATE FROM URL ---
+                  const tabParam = searchParams.get('tab');
+                  const uidParam = searchParams.get('uid');
+                  const sessionParam = searchParams.get('sessionId');
 
-                 if (tabParam === 'users' || tabParam === 'chats' || tabParam === 'dashboard') {
-                     setActiveTab(tabParam);
-                 }
+                  if (tabParam === 'users' || tabParam === 'chats' || tabParam === 'dashboard') {
+                      setActiveTab(tabParam);
+                  }
 
-                 // If we are in 'chats' and have a UID, load that user's sessions
-                 if (tabParam === 'chats' && uidParam) {
-                     try {
-                         const userDoc = await getDoc(doc(db, 'users', uidParam));
-                         if (userDoc.exists()) {
-                             const targetUser = { uid: userDoc.id, ...userDoc.data() } as UserData;
-                             setSelectedUserForChat(targetUser);
-                             
-                             // Fetch sessions for this user
-                             const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
-                             const snap = await getDocs(q);
-                             const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
-                             setUserSessions(fetchedSessions);
+                  // If we are in 'chats' and have a UID, load that user's sessions
+                  if (tabParam === 'chats' && uidParam) {
+                      try {
+                          const userDoc = await getDoc(doc(db, 'users', uidParam));
+                          if (userDoc.exists()) {
+                              const targetUser = { uid: userDoc.id, ...userDoc.data() } as UserData;
+                              setSelectedUserForChat(targetUser);
+                              
+                              // Fetch sessions for this user
+                              const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
+                              const snap = await getDocs(q);
+                              const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+                              setUserSessions(fetchedSessions);
 
-                             // If we also have a Session ID, load that chat
-                             if (sessionParam) {
-                                 setActiveSessionId(sessionParam);
-                                 // Fetch chat logs
-                                 const qLogs = query(collection(db, 'chats'), where('sessionId', '==', sessionParam), orderBy('createdAt', 'asc'));
-                                 const snapLogs = await getDocs(qLogs);
-                                 setChatLogs(snapLogs.docs.map(d => d.data() as ChatMessage));
-                             }
-                         }
-                     } catch (err) {
-                         console.error("Error restoring state:", err);
-                     }
-                 }
-             } else {
-                 router.push('/');
-             }
-             setLoading(false);
+                              // If we also have a Session ID, load that chat
+                              if (sessionParam) {
+                                  setActiveSessionId(sessionParam);
+                                  // Fetch chat logs
+                                  const qLogs = query(collection(db, 'chats'), where('sessionId', '==', sessionParam), orderBy('createdAt', 'asc'));
+                                  const snapLogs = await getDocs(qLogs);
+                                  setChatLogs(snapLogs.docs.map(d => d.data() as ChatMessage));
+                              }
+                          }
+                      } catch (err) {
+                          console.error("Error restoring state:", err);
+                      }
+                  }
+              } else {
+                  router.push('/');
+              }
+              setLoading(false);
         });
       } else {
+        // 🔒 LOGOUT FIX: Reset state immediately when no user is present
+        setUser(null);
+        setIsAdmin(false);
         setLoading(false);
       }
     });
@@ -286,6 +294,7 @@ function AdminContent() {
   // 4. NAVIGATION & ACTIONS
   const handleSwitchTab = (tab: 'dashboard' | 'users' | 'chats') => {
       setActiveTab(tab);
+      setIsSidebarOpen(false); // ✅ Close sidebar on mobile select
       const params = new URLSearchParams(searchParams.toString());
       params.set('tab', tab);
       if (tab !== 'chats') {
@@ -450,6 +459,8 @@ function AdminContent() {
   };
 
   if (loading) return <div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center font-mono">Loading Portal...</div>;
+  
+  // ✅ AUTH GUARD
   if (!user || !isAdmin) return <Login />;
 
   const filteredUsers = users.filter(u => {
@@ -464,20 +475,37 @@ function AdminContent() {
       
       {/* Processing Overlay */}
       {processingAction && (
-        <div className="absolute inset-0 bg-black/80 z-50 flex items-center justify-center flex-col gap-4 backdrop-blur-sm">
+        <div className="absolute inset-0 bg-black/80 z-[100] flex items-center justify-center flex-col gap-4 backdrop-blur-sm">
             <Loader2 size={48} className="text-red-500 animate-spin" />
             <div className="text-white font-bold text-lg">Server-Side Deletion in Progress...</div>
             <div className="text-gray-400 text-sm">Recursively removing user data via secure API.</div>
         </div>
       )}
 
-      {/* SIDEBAR */}
-      <aside className="w-64 border-r border-white/10 bg-[#0c0c0e] flex flex-col shadow-2xl z-20">
-        <div className="p-6 border-b border-white/5">
-            <h1 className="text-lg font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent flex items-center gap-2">
-               <Shield size={18} className="text-red-500" /> ADMIN PORTAL
-            </h1>
-            <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest pl-1">Authorized Personnel Only</p>
+      {/* ✅ MOBILE MENU OVERLAY */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-sm"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* ✅ RESPONSIVE SIDEBAR */}
+      <aside className={`
+        fixed inset-y-0 left-0 z-50 w-64 border-r border-white/10 bg-[#0c0c0e] flex flex-col shadow-2xl transition-transform duration-300 ease-in-out md:relative md:translate-x-0
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+      `}>
+        <div className="p-6 border-b border-white/5 flex items-center justify-between">
+            <div className="flex flex-col">
+              <h1 className="text-lg font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent flex items-center gap-2">
+                  <Shield size={18} className="text-red-500" /> ADMIN PORTAL
+              </h1>
+              <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest pl-1">Authorized Personnel Only</p>
+            </div>
+            {/* Close button for mobile */}
+            <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-400 hover:text-white">
+                <X size={20} />
+            </button>
         </div>
         
         <nav className="flex-1 p-4 space-y-2">
@@ -509,49 +537,55 @@ function AdminContent() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-hidden flex flex-col bg-[#050505]">
+      <main className="flex-1 overflow-hidden flex flex-col bg-[#050505] w-full">
         
-        {/* TOP BAR */}
-        <header className="h-16 border-b border-white/10 bg-[#09090b]/90 backdrop-blur-md flex items-center justify-between px-8 z-10">
+        {/* ✅ RESPONSIVE TOP BAR */}
+        <header className="h-16 border-b border-white/10 bg-[#09090b]/90 backdrop-blur-md flex items-center justify-between px-4 md:px-8 z-10 shrink-0">
             <div className="flex items-center gap-3">
-                <div className={`w-2 h-2 rounded-full ${
+                {/* HAMBURGER BUTTON */}
+                <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-gray-400 hover:text-white">
+                    <Menu size={20} />
+                </button>
+
+                <div className={`hidden md:block w-2 h-2 rounded-full ${
                     activeTab === 'dashboard' ? 'bg-orange-500' :
                     activeTab === 'users' ? 'bg-red-500' : 'bg-blue-500'
                 } animate-pulse`}></div>
-                <h2 className="font-semibold text-sm tracking-wide text-gray-200 uppercase">
+                
+                <h2 className="font-semibold text-sm tracking-wide text-gray-200 uppercase truncate">
                     {activeTab === 'dashboard' ? 'System Overview' : 
                      activeTab === 'users' ? 'User Database' : 'Forensic Inspector'}
                 </h2>
             </div>
             
             {activeTab === 'users' && (
-                <div className="flex items-center gap-4">
-                     <button onClick={exportToCSV} className="flex items-center gap-2 text-xs font-medium text-gray-400 hover:text-white transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-white/10 hover:bg-white/10">
-                        <Download size={14} /> Export CSV
-                    </button>
+                <div className="flex items-center gap-2 md:gap-4">
+                     <button onClick={exportToCSV} className="hidden md:flex items-center gap-2 text-xs font-medium text-gray-400 hover:text-white transition-colors bg-white/5 px-3 py-1.5 rounded-md border border-white/10 hover:bg-white/10">
+                         <Download size={14} /> Export CSV
+                     </button>
                     <div className="relative group">
-                        <div className="flex items-center gap-2 bg-[#18181b] border border-white/10 rounded-full px-4 py-1.5 text-xs text-white">
+                        <div className="flex items-center gap-2 bg-[#18181b] border border-white/10 rounded-full px-3 py-1.5 md:px-4 text-xs text-white">
                             <Filter size={12} className="text-gray-500" />
                             <select 
                                 value={filterStatus} 
                                 onChange={(e) => setFilterStatus(e.target.value as any)}
-                                className="bg-transparent focus:outline-none appearance-none cursor-pointer"
+                                className="bg-transparent focus:outline-none appearance-none cursor-pointer max-w-[80px] md:max-w-none truncate"
                             >
-                                <option value="all">All Status</option>
+                                <option value="all">All</option>
                                 <option value="approved">Approved</option>
                                 <option value="pending">Pending</option>
                                 <option value="banned">Banned</option>
                             </select>
                         </div>
                     </div>
-                    <div className="relative">
+                    <div className="relative hidden md:block">
                         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                         <input 
                             type="text" 
                             placeholder="Search..." 
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="bg-[#18181b] border border-white/10 rounded-full pl-9 pr-4 py-1.5 text-xs text-white focus:outline-none focus:border-white/30 transition-all w-64"
+                            className="bg-[#18181b] border border-white/10 rounded-full pl-9 pr-4 py-1.5 text-xs text-white focus:outline-none focus:border-white/30 transition-all w-48 lg:w-64"
                         />
                     </div>
                 </div>
@@ -559,12 +593,13 @@ function AdminContent() {
         </header>
 
         {/* CONTENT AREA */}
-        <div className="flex-1 overflow-y-auto p-6" id="scroll-container">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6" id="scroll-container">
             
             {/* 0. DASHBOARD TAB */}
             {activeTab === 'dashboard' && (
                 <div className="max-w-6xl mx-auto space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    {/* ✅ Responsive Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="bg-[#0c0c0e] p-5 rounded-xl border border-white/5 shadow-lg relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity"><Users size={64} /></div>
                             <div className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1">Total Users</div>
@@ -583,7 +618,7 @@ function AdminContent() {
                             <div className="text-3xl font-bold text-yellow-400">{serverMetrics.pending}</div>
                             <div className="text-[10px] text-gray-600 mt-2">Action Required</div>
                         </div>
-                         <div className="bg-[#0c0c0e] p-5 rounded-xl border border-red-500/20 shadow-lg relative overflow-hidden group">
+                          <div className="bg-[#0c0c0e] p-5 rounded-xl border border-red-500/20 shadow-lg relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity"><Ban size={64} className="text-red-500" /></div>
                             <div className="text-red-500/70 text-xs font-bold uppercase tracking-widest mb-1">Banned</div>
                             <div className="text-3xl font-bold text-red-400">{serverMetrics.banned}</div>
@@ -597,7 +632,7 @@ function AdminContent() {
                                 <Activity size={14} className="text-blue-400" />
                                 <span className="text-xs font-bold uppercase tracking-widest text-gray-400">System Health</span>
                             </div>
-                            <div className="p-6 flex-1 flex flex-col justify-center items-center gap-4 opacity-50">
+                            <div className="p-6 flex-1 flex flex-col justify-center items-center gap-4 opacity-50 min-h-[150px]">
                                 <div className="w-16 h-16 rounded-full border-4 border-green-500/20 border-t-green-500 animate-spin"></div>
                                 <p className="text-xs text-gray-500">Database Connection Stable</p>
                             </div>
@@ -611,7 +646,7 @@ function AdminContent() {
                                 </div>
                                 <button onClick={() => handleSwitchTab('users')} className="text-[10px] text-blue-400 hover:underline">View All</button>
                             </div>
-                            <div className="flex-1 overflow-y-auto max-h-64 p-2">
+                            <div className="flex-1 overflow-y-auto max-h-64 p-2 min-h-[150px]">
                                 {serverMetrics.pending === 0 ? (
                                     <div className="flex h-full items-center justify-center text-gray-600 text-xs py-8">No pending requests.</div>
                                 ) : (
@@ -626,8 +661,9 @@ function AdminContent() {
             {/* 1. USER MANAGEMENT TAB */}
             {activeTab === 'users' && (
                 <div className="bg-[#0c0c0e] rounded-xl border border-white/5 overflow-hidden shadow-2xl flex flex-col h-full">
-                    <div className="flex-1 overflow-y-auto">
-                        <table className="w-full text-left border-collapse">
+                    {/* ✅ Responsive Table Wrapper */}
+                    <div className="flex-1 overflow-y-auto overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[700px]">
                             <thead>
                                 <tr className="border-b border-white/5 bg-white/[0.02] text-[10px] uppercase tracking-widest text-gray-500 sticky top-0 z-10 backdrop-blur-md">
                                     <th className="p-4 pl-6">User</th>
@@ -717,14 +753,15 @@ function AdminContent() {
 
             {/* 2. CHAT INSPECTOR TAB */}
             {activeTab === 'chats' && (
-                <div className="flex h-full gap-6">
+                <div className="flex h-full gap-6 flex-col md:flex-row">
                     {/* Session List */}
-                    <div className="w-80 bg-[#0c0c0e] rounded-xl border border-white/5 overflow-hidden flex flex-col shadow-xl">
+                    {/* ✅ Responsive Logic: Hide list on mobile if chat is open */}
+                    <div className={`w-full md:w-80 bg-[#0c0c0e] rounded-xl border border-white/5 overflow-hidden flex flex-col shadow-xl ${activeSessionId ? 'hidden md:flex' : 'flex'}`}>
                         <div className="p-4 border-b border-white/5 bg-white/[0.02] font-medium text-xs text-gray-400 uppercase tracking-widest flex justify-between items-center">
                             <span className="truncate">{selectedUserForChat ? selectedUserForChat.displayName : 'Select User'}</span>
                             {selectedUserForChat && <button onClick={handleCloseInspector} className="text-gray-500 hover:text-white"><X size={14}/></button>}
                         </div>
-                        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar min-h-[300px] md:min-h-0">
                             {!selectedUserForChat && (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-6 opacity-40">
                                     <Users size={32} className="mb-2" />
@@ -742,10 +779,9 @@ function AdminContent() {
                                 >
                                     <div className="flex justify-between items-start">
                                         <div className="font-medium truncate pr-2">{sess.title}</div>
-                                        {/* PERMANENT DELETE BUTTON */}
                                         <button 
                                             onClick={(e) => { e.stopPropagation(); deleteSessionPermanently(sess.id); }}
-                                            className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+                                            className="opacity-100 md:opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
                                             title="Permanently Delete Session"
                                         >
                                             <Trash2 size={12} />
@@ -756,7 +792,6 @@ function AdminContent() {
                                             <Clock size={10} />
                                             {sess.createdAt?.toDate ? new Date(sess.createdAt.toDate()).toLocaleDateString() : ''}
                                         </div>
-                                        {/* USER DELETED INDICATOR */}
                                         {sess.deletedByUser && (
                                             <span className="text-[9px] bg-red-900/30 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
                                                 User Deleted
@@ -769,9 +804,14 @@ function AdminContent() {
                     </div>
 
                     {/* Chat Logs */}
-                    <div className="flex-1 bg-[#0c0c0e] rounded-xl border border-white/5 overflow-hidden flex flex-col shadow-xl">
+                    {/* ✅ Responsive Logic: Show logs full screen on mobile when open */}
+                    <div className={`flex-1 bg-[#0c0c0e] rounded-xl border border-white/5 overflow-hidden flex flex-col shadow-xl ${activeSessionId ? 'flex' : 'hidden md:flex'}`}>
                         <div className="p-4 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
                              <div className="font-medium text-xs text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                {/* ✅ Back Button for Mobile */}
+                                <button onClick={() => setActiveSessionId(null)} className="md:hidden text-gray-300 mr-2">
+                                    <ArrowLeft size={18} />
+                                </button>
                                 <span>Transcript View</span>
                                 {activeSessionId && userSessions.find(s => s.id === activeSessionId)?.deletedByUser && (
                                     <span className="text-red-500 flex items-center gap-1 bg-red-900/10 px-2 py-0.5 rounded border border-red-500/20">
@@ -791,7 +831,7 @@ function AdminContent() {
                              )}
                         </div>
                         
-                        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar bg-[#050505]">
+                        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-8 custom-scrollbar bg-[#050505] min-h-[400px]">
                             {!activeSessionId && <div className="flex h-full items-center justify-center text-gray-600 text-xs uppercase tracking-widest">Select a session to inspect</div>}
                             
                             {chatLogs.map((msg, i) => (
@@ -801,9 +841,8 @@ function AdminContent() {
                                         {msg.role} {msg.provider && `(${msg.provider})`}
                                     </div>
                                     
-                                    <div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-[#1e1f20] text-gray-200 rounded-tr-sm' : 'bg-blue-900/10 text-blue-100 border border-blue-500/20 rounded-tl-sm'}`}>
+                                    <div className={`max-w-[90%] md:max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-[#1e1f20] text-gray-200 rounded-tr-sm' : 'bg-blue-900/10 text-blue-100 border border-blue-500/20 rounded-tl-sm'}`}>
                                         
-                                        {/* IMAGE RENDERER */}
                                         {msg.image && (
                                             <div className="mb-3 rounded-lg overflow-hidden border border-white/10 bg-black relative group">
                                                 <img src={msg.image} alt="User Attachment" className="max-w-full h-auto max-h-60 object-contain mx-auto" />
@@ -816,7 +855,6 @@ function AdminContent() {
                                             </div>
                                         )}
 
-                                        {/* Text Content (WITH MARKDOWN) */}
                                         <AdminMarkdownRenderer content={msg.content || ""} />
                                     </div>
                                 </div>
@@ -831,7 +869,7 @@ function AdminContent() {
   );
 }
 
-// ✅ NEW DEFAULT EXPORT WRAPPED IN SUSPENSE
+// ✅ DEFAULT EXPORT WRAPPED IN SUSPENSE
 export default function AdminPage() {
   return (
     <Suspense fallback={<div className="min-h-screen bg-[#09090b] text-white flex items-center justify-center font-mono">Initializing Admin Portal...</div>}>
