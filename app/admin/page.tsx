@@ -135,6 +135,12 @@ function AdminContent() {
   const [fetchingUsers, setFetchingUsers] = useState(false);
   const [hasMoreUsers, setHasMoreUsers] = useState(true);
   
+  // ✅ Session Pagination State
+  const [userSessions, setUserSessions] = useState<ChatSession[]>([]);
+  const [lastVisibleSession, setLastVisibleSession] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [fetchingSessions, setFetchingSessions] = useState(false);
+  const [hasMoreSessions, setHasMoreSessions] = useState(false);
+
   // Metrics State
   const [serverMetrics, setServerMetrics] = useState({
       total: 0,
@@ -152,7 +158,6 @@ function AdminContent() {
 
   // Chat Inspector State
   const [selectedUserForChat, setSelectedUserForChat] = useState<UserData | null>(null);
-  const [userSessions, setUserSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [chatLogs, setChatLogs] = useState<ChatMessage[]>([]);
 
@@ -195,11 +200,33 @@ function AdminContent() {
                              const targetUser = { uid: userDoc.id, ...userDoc.data() } as UserData;
                              setSelectedUserForChat(targetUser);
                              
-                             // Fetch sessions for this user
-                             const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
-                             const snap = await getDocs(q);
-                             const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
-                             setUserSessions(fetchedSessions);
+                             // ✅ Fetch First Batch of Sessions
+                             // We call the fetch logic directly here for initialization
+                             const SESSIONS_PER_PAGE = 20;
+                             try {
+                                 const q = query(
+                                     collection(db, 'sessions'), 
+                                     where('userId', '==', targetUser.uid), 
+                                     orderBy('createdAt', 'desc'),
+                                     limit(SESSIONS_PER_PAGE)
+                                 );
+                                 const snap = await getDocs(q);
+                                 const fetchedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+                                 
+                                 setUserSessions(fetchedSessions);
+                                 setLastVisibleSession(snap.docs[snap.docs.length - 1] || null);
+                                 setHasMoreSessions(snap.docs.length === SESSIONS_PER_PAGE);
+
+                                 // Fallback Logic (if index missing)
+                             } catch (err) {
+                                 console.warn("Session pagination failed (likely missing index), using fallback:", err);
+                                 const q2 = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid));
+                                 const snap2 = await getDocs(q2);
+                                 const sessions = snap2.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+                                 sessions.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                                 setUserSessions(sessions);
+                                 setHasMoreSessions(false);
+                             }
 
                              // If we also have a Session ID, load that chat
                              if (sessionParam) {
@@ -321,6 +348,57 @@ function AdminContent() {
       }
   }, [isAdmin, filterStatus]);
 
+  // ✅ SESSION PAGINATION HELPER
+  const SESSIONS_PER_PAGE = 20;
+
+  const fetchSessions = async (uid: string, reset = false) => {
+      if (fetchingSessions && !reset) return;
+      
+      setFetchingSessions(true);
+      try {
+          let q = query(
+              collection(db, 'sessions'), 
+              where('userId', '==', uid), 
+              orderBy('createdAt', 'desc'),
+              limit(SESSIONS_PER_PAGE)
+          );
+
+          if (!reset && lastVisibleSession) {
+              q = query(q, startAfter(lastVisibleSession));
+          }
+
+          const snapshot = await getDocs(q);
+          const newSessions = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+
+          setLastVisibleSession(snapshot.docs[snapshot.docs.length - 1] || null);
+          setHasMoreSessions(snapshot.docs.length === SESSIONS_PER_PAGE);
+
+          if (reset) {
+              setUserSessions(newSessions);
+          } else {
+              setUserSessions(prev => [...prev, ...newSessions]);
+          }
+
+      } catch (error) {
+          console.error("Session fetch error (likely index missing), using fallback:", error);
+          // Fallback: Fetch ALL (Old Behavior) if pagination query fails
+          if (reset) {
+             try {
+                const q2 = query(collection(db, 'sessions'), where('userId', '==', uid));
+                const snap2 = await getDocs(q2);
+                const sessions = snap2.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
+                sessions.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                setUserSessions(sessions);
+                setHasMoreSessions(false); // Disable pagination for fallback
+             } catch (e2) {
+                 console.error("Fallback failed", e2);
+             }
+          }
+      } finally {
+          setFetchingSessions(false);
+      }
+  };
+
   // 4. ACTIONS & UPDATES
   const handleSwitchTab = (tab: 'dashboard' | 'users' | 'chats') => {
       setActiveTab(tab);
@@ -355,17 +433,8 @@ function AdminContent() {
       params.delete('sessionId'); 
       router.push(`?${params.toString()}`);
 
-      try {
-        const q = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
-        setUserSessions(snap.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession)));
-      } catch (e) {
-          const q2 = query(collection(db, 'sessions'), where('userId', '==', targetUser.uid));
-          const snap2 = await getDocs(q2);
-          const sessions = snap2.docs.map(d => ({ id: d.id, ...d.data() } as ChatSession));
-          sessions.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-          setUserSessions(sessions);
-      }
+      // ✅ Use Paginated Fetch
+      fetchSessions(targetUser.uid, true);
   };
 
   const loadChatLogs = async (sessionId: string) => {
@@ -946,6 +1015,17 @@ function AdminContent() {
                                     </div>
                                 </div>
                             ))}
+                            {/* ✅ Load More Sessions Button */}
+                            {selectedUserForChat && hasMoreSessions && (
+                                <button 
+                                    onClick={() => fetchSessions(selectedUserForChat.uid)} 
+                                    disabled={fetchingSessions}
+                                    className="w-full mt-2 py-2 text-xs text-gray-500 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center gap-2"
+                                >
+                                    {fetchingSessions ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+                                    Load More Sessions
+                                </button>
+                            )}
                         </div>
                     </div>
 
