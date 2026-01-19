@@ -10,10 +10,12 @@ import {
   query, orderBy, getDoc 
 } from 'firebase/firestore';
 
-type SupportStatus = 'none' | 'pending' | 'approved';
+// ✅ Fix: Added 'loading' to the type definition
+type SupportStatus = 'loading' | 'none' | 'pending' | 'approved';
 
 export default function SupportInterface({ user }: { user: any }) {
-  const [status, setStatus] = useState<SupportStatus>('loading' as any);
+  // ✅ Fix: Removed 'as any' cast since 'loading' is now a valid type
+  const [status, setStatus] = useState<SupportStatus>('loading');
   const [complaint, setComplaint] = useState('');
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
