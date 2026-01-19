@@ -4,16 +4,19 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LogIn, ArrowRight, ShieldAlert, Zap, ShieldCheck, Mail, Key, Loader2, 
-  Sparkles, Cpu, Globe, Lock, CheckCircle2 
+  Sparkles, Cpu, Globe, Lock, CheckCircle2, HelpCircle, X, Send 
 } from 'lucide-react';
 import { auth, googleProvider, db } from '@/lib/firebase';
 import { signInWithPopup, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, onSnapshot, addDoc, collection } from 'firebase/firestore';
 
 export default function Login() {
   const [status, setStatus] = useState<'idle' | 'loading' | 'pending' | 'banned' | 'success'>('idle');
   const [method, setMethod] = useState<'google' | 'email'>('google');
   
+  // ✅ Support Modal State
+  const [showSupport, setShowSupport] = useState(false);
+
   // Email/Pass State
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -98,6 +101,9 @@ export default function Login() {
   return (
     <div className="flex min-h-[100dvh] w-full bg-[#050505] text-white overflow-hidden font-sans selection:bg-blue-500/30">
       
+      {/* ✅ GUEST SUPPORT MODAL */}
+      <GuestSupportModal isOpen={showSupport} onClose={() => setShowSupport(false)} />
+
       {/* --- LEFT SIDE: HERO (Desktop Only) --- */}
       <div className="hidden lg:flex w-1/2 relative bg-[#0a0a0b] items-center justify-center overflow-hidden border-r border-white/5">
         {/* Animated Background Mesh */}
@@ -169,9 +175,19 @@ export default function Login() {
                <h2 className="text-2xl font-bold">TurboLearn AI</h2>
             </div>
 
-            <div className="space-y-2 text-center lg:text-left">
-               <h2 className="text-3xl font-bold tracking-tight">Welcome back</h2>
-               <p className="text-gray-400">Enter your credentials to access the terminal.</p>
+            {/* ✅ HEADER WITH SUPPORT BUTTON */}
+            <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                    <h2 className="text-3xl font-bold tracking-tight">Welcome back</h2>
+                    <p className="text-gray-400">Enter your credentials to access the terminal.</p>
+                </div>
+                <button 
+                    onClick={() => setShowSupport(true)}
+                    className="p-2.5 rounded-full text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
+                    title="Problem logging in?"
+                >
+                    <HelpCircle size={20} />
+                </button>
             </div>
 
             {/* Toggle */}
@@ -262,6 +278,107 @@ const StatusScreen = ({ type, action }: { type: 'pending' | 'banned' | 'success'
             </button>
           )}
        </motion.div>
+    </div>
+  );
+};
+
+// ✅ Guest Support Modal
+const GuestSupportModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState<'idle' | 'submitting' | 'success'>('idle');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !message.trim()) return;
+
+    setStatus('submitting');
+    try {
+      // ✅ Create a support ticket in Firestore
+      await addDoc(collection(db, 'support_tickets'), {
+        email,
+        message,
+        status: 'new',
+        createdAt: serverTimestamp(),
+      });
+      setStatus('success');
+      setTimeout(() => {
+        onClose();
+        setStatus('idle');
+        setEmail('');
+        setMessage('');
+      }, 2000);
+    } catch (err) {
+      console.error(err);
+      setStatus('idle');
+      alert("Failed to send message. Please try again.");
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }} 
+        animate={{ scale: 1, opacity: 1 }} 
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-[#0c0c0e] border border-white/10 w-full max-w-md rounded-2xl p-6 shadow-2xl relative"
+      >
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors">
+          <X size={20} />
+        </button>
+
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-3 bg-blue-600/10 rounded-xl border border-blue-500/20 text-blue-400">
+            <Mail size={24} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-white">Contact Support</h3>
+            <p className="text-xs text-gray-400">Cannot log in? Leave a message.</p>
+          </div>
+        </div>
+
+        {status === 'success' ? (
+          <div className="py-8 text-center flex flex-col items-center animate-in fade-in">
+            <CheckCircle2 size={48} className="text-green-400 mb-4" />
+            <h4 className="text-lg font-bold text-white">Message Sent!</h4>
+            <p className="text-gray-400 text-sm mt-2">Our team will contact you at {email}.</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5 ml-1">Your Email</label>
+              <input 
+                type="email" 
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-[#18181b] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500/50 transition-colors"
+                placeholder="student@example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5 ml-1">Message</label>
+              <textarea 
+                required
+                rows={4}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                className="w-full bg-[#18181b] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500/50 transition-colors resize-none"
+                placeholder="I cannot login because..."
+              />
+            </div>
+            <button 
+              type="submit" 
+              disabled={status === 'submitting'}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {status === 'submitting' ? <Loader2 size={18} className="animate-spin" /> : <><Send size={16} /> Send Message</>}
+            </button>
+          </form>
+        )}
+      </motion.div>
     </div>
   );
 };

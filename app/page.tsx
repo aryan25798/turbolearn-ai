@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic'; // ✅ Added for Lazy Loading
 import { 
   Terminal, Cpu, Sparkles, Plus, Trash2, LogOut, Menu, X, User as UserIcon, 
   Mic, StopCircle, VolumeX, Camera, ScanText, Maximize2, Minimize2, ArrowLeft, Shield,
-  Clock, ShieldAlert, History, Brain, Crown
+  Clock, ShieldAlert, History, Brain, Crown, LifeBuoy
 } from 'lucide-react';
 import { db, auth, storage } from '@/lib/firebase';
 import { signOut, onAuthStateChanged, User } from 'firebase/auth';
@@ -18,7 +18,6 @@ import Login from '@/components/Login';
 import CameraModal from '@/components/CameraModal';
 
 // ✅ DYNAMIC IMPORT: Lazy loads the heavy Markdown/Math renderer
-// This reduces the initial bundle size significantly.
 const MarkdownRenderer = dynamic(() => import('@/components/MarkdownRenderer'), {
   loading: () => <div className="h-10 w-full animate-pulse rounded bg-[#2c2d2e]/50 mb-2" />,
   ssr: false // ✅ Disable SSR for chat content to avoid hydration mismatches
@@ -153,6 +152,9 @@ export default function Home() {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  
+  // ⚡ FIX: Add loading state for sessions
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
 
   const groqEndRef = useRef<HTMLDivElement>(null);
   const googleEndRef = useRef<HTMLDivElement>(null);
@@ -220,6 +222,7 @@ export default function Home() {
         unsubUserRef.current = unsubUser;
 
         // --- PERSIST CHAT ON REFRESH ---
+        // ⚡ FIX: We read from localStorage here, but VALIDATION happens in the listener below
         const savedSessionId = localStorage.getItem('turboLastSession');
         if (savedSessionId) setCurrentSessionId(savedSessionId);
 
@@ -232,7 +235,23 @@ export default function Home() {
 
         const unsubSessions = onSnapshot(q, (snapshot) => {
           const fetchedSessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Session));
-          setSessions(fetchedSessions.filter(s => !s.deletedByUser));
+          const validSessions = fetchedSessions.filter(s => !s.deletedByUser);
+          setSessions(validSessions);
+          
+          // ⚡ FIX: Mark sessions as loaded
+          setSessionsLoaded(true);
+
+          // ⚡ FIX: Check if the locally stored session actually exists. If not, clear it.
+          // This prevents "Permission Denied" when trying to load a deleted/invalid session.
+          const storedSessionId = localStorage.getItem('turboLastSession');
+          if (storedSessionId) {
+             const sessionExists = validSessions.find(s => s.id === storedSessionId);
+             if (!sessionExists) {
+                 // The session ID in storage is stale (deleted or wrong user). Clear it.
+                 setCurrentSessionId(null);
+                 localStorage.removeItem('turboLastSession');
+             }
+          }
         });
         unsubSessionsRef.current = unsubSessions;
 
@@ -243,6 +262,7 @@ export default function Home() {
         setAccountStatus('loading'); 
         setAuthLoading(false);
         setQuotaData(null);
+        setSessionsLoaded(false);
       }
     });
 
@@ -255,7 +275,12 @@ export default function Home() {
 
   // 2. LOAD CHAT
   useEffect(() => {
-    if (currentSessionId && user && accountStatus === 'approved') {
+    // ⚡ FIX: Verify session validity before querying.
+    // If we haven't loaded sessions yet (sessionsLoaded is false), WAIT.
+    // If we have loaded sessions, ensure currentSessionId is inside that list.
+    const isValidSession = sessions.find(s => s.id === currentSessionId);
+
+    if (currentSessionId && user && accountStatus === 'approved' && sessionsLoaded && isValidSession) {
       setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
       setDeepseekError(false); // Reset error on load
       
@@ -271,10 +296,11 @@ export default function Home() {
 
       return () => { unsubGroq(); unsubGoogle(); unsubDeepseek(); };
     } else {
+      // Clean slate if session is invalid or not yet verified
       setGroqMessages([]); setGoogleMessages([]); setDeepseekMessages([]);
       setDeepseekError(false);
     }
-  }, [currentSessionId, user, accountStatus]);
+  }, [currentSessionId, user, accountStatus, sessionsLoaded, sessions]); // ⚡ FIX: Added dependencies
 
   useEffect(() => { 
       if (!focusedProvider || focusedProvider === 'groq') groqEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
@@ -726,6 +752,17 @@ export default function Home() {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* ✅ SUPPORT BUTTON */}
+        <div className="px-4 mb-2 min-w-[280px]">
+           <button 
+             onClick={() => window.location.href='/support'}
+             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-900/10 text-blue-400 border border-blue-500/20 hover:bg-blue-900/20 transition-all font-medium text-sm group"
+           >
+              <LifeBuoy size={18} className="group-hover:scale-110 transition-transform" /> 
+              Contact Support
+           </button>
         </div>
 
         <div className="p-4 mt-auto border-t border-white/5 bg-[#171819] min-w-[280px]">
