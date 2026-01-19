@@ -218,7 +218,10 @@ const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: (
   // 🅰️ GUEST TICKET VIEW
   if (activeCase.type === 'ticket') {
       return (
-        <div className="flex flex-col h-full bg-[#050505] p-8 items-center justify-center relative">
+        <div className="flex flex-col h-full bg-[#050505] md:p-8 p-4 items-center justify-center relative">
+            <button onClick={onClear} className="md:hidden absolute top-4 left-4 text-gray-400 hover:text-white flex items-center gap-2">
+                <ArrowLeft size={18} /> Back
+            </button>
             <div className="max-w-lg w-full bg-[#0c0c0e] border border-white/10 rounded-2xl p-8 shadow-2xl">
                 <div className="flex items-center gap-4 mb-6 pb-6 border-b border-white/5">
                     <div className="w-12 h-12 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-400">
@@ -267,36 +270,42 @@ const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: (
   return (
     <div className="flex flex-col h-full bg-[#050505]">
        {/* Header */}
-       <div className="p-6 border-b border-white/10 bg-[#0c0c0e] flex justify-between items-start shrink-0">
-          <div className="flex-1 mr-6">
-             <h3 className="font-bold text-white text-lg flex items-center gap-2">
-                {data.displayName} 
-                <span className="text-xs font-normal text-gray-500 font-mono px-2 py-0.5 bg-white/5 rounded">{data.email}</span>
-             </h3>
-             <div className="mt-3 text-sm text-gray-300 bg-red-900/10 p-3 rounded-lg border border-red-500/10">
+       <div className="p-4 md:p-6 border-b border-white/10 bg-[#0c0c0e] flex flex-col md:flex-row justify-between items-start shrink-0 gap-4">
+          <div className="flex-1 mr-0 md:mr-6 w-full">
+             <div className="flex items-center gap-3 mb-2">
+                 {/* Mobile Back Button */}
+                 <button onClick={onClear} className="md:hidden text-gray-400 hover:text-white">
+                     <ArrowLeft size={20} />
+                 </button>
+                 <h3 className="font-bold text-white text-lg flex items-center gap-2 truncate">
+                    {data.displayName} 
+                    <span className="text-xs font-normal text-gray-500 font-mono px-2 py-0.5 bg-white/5 rounded hidden sm:inline-block">{data.email}</span>
+                 </h3>
+             </div>
+             <div className="text-sm text-gray-300 bg-red-900/10 p-3 rounded-lg border border-red-500/10">
                 <span className="text-[10px] text-red-400 uppercase font-bold block mb-1 flex items-center gap-1"><AlertCircle size={10} /> Reported Issue:</span>
                 {data.complaint}
              </div>
           </div>
-          <div className="shrink-0 flex flex-col gap-2 items-end">
+          <div className="shrink-0 flex flex-row md:flex-col gap-2 items-center md:items-end w-full md:w-auto justify-end">
             {data.status === 'pending' ? (
-                <button onClick={approveChat} className="bg-green-600 hover:bg-green-500 text-white px-5 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-green-900/20 active:scale-95">
+                <button onClick={approveChat} className="bg-green-600 hover:bg-green-500 text-white px-5 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-green-900/20 active:scale-95 w-full md:w-auto justify-center">
                     <Check size={14} /> Approve Request
                 </button>
             ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 w-full md:w-auto">
                     {data.status !== 'resolved' && (
-                        <button onClick={markResolved} className="bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all">
+                        <button onClick={markResolved} className="flex-1 md:flex-none bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all">
                             <CheckCircle size={14} /> Resolve
                         </button>
                     )}
-                    <button onClick={deleteCase} className="bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all">
+                    <button onClick={deleteCase} className="flex-1 md:flex-none bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all">
                         <Trash2 size={14} /> Delete
                     </button>
                 </div>
             )}
             
-            <div className="mt-1">
+            <div className="hidden md:block mt-1">
                 {data.status === 'approved' && (
                     <span className="text-green-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
                         <CheckCircle size={10} /> Active
@@ -312,7 +321,7 @@ const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: (
        </div>
 
        {/* Messages */}
-       <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[#050505]">
+       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 custom-scrollbar bg-[#050505]">
           {msgs.length === 0 && data.status === 'approved' && (
               <div className="text-center text-gray-600 text-xs mt-10 p-4 border border-dashed border-white/10 rounded-xl">
                  Channel is open. Send a message to start.
@@ -320,7 +329,7 @@ const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: (
           )}
           {msgs.map((m, i) => (
              <div key={i} className={`flex ${m.sender === 'admin' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                <div className={`max-w-[85%] md:max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
                     m.sender === 'admin' 
                     ? 'bg-blue-600 text-white rounded-tr-sm' 
                     : 'bg-[#1e1f20] text-gray-300 border border-white/10 rounded-tl-sm'
@@ -334,7 +343,7 @@ const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: (
 
        {/* Input */}
        {data.status !== 'resolved' && data.status !== 'pending' && (
-          <form onSubmit={sendChatReply} className="p-4 bg-[#0c0c0e] border-t border-white/5 flex gap-3 shrink-0">
+          <form onSubmit={sendChatReply} className="p-3 md:p-4 bg-[#0c0c0e] border-t border-white/5 flex gap-2 md:gap-3 shrink-0">
              <input 
                 value={reply} 
                 onChange={e=>setReply(e.target.value)} 
@@ -1140,11 +1149,11 @@ function AdminContent() {
                 </div>
             )}
 
-            {/* 3. ✅ SUPPORT CENTER TAB */}
+            {/* 3. ✅ SUPPORT CENTER TAB (RESPONSIVE) */}
             {activeTab === 'support' && (
                 <div className="flex h-full gap-6 flex-col md:flex-row">
                     {/* List of Cases */}
-                    <div className="w-full md:w-80 bg-[#0c0c0e] rounded-xl border border-white/5 flex flex-col shadow-xl overflow-hidden">
+                    <div className={`w-full md:w-80 bg-[#0c0c0e] rounded-xl border border-white/5 flex flex-col shadow-xl overflow-hidden ${activeSupportCase ? 'hidden md:flex' : 'flex'}`}>
                         <div className="p-4 border-b border-white/5 bg-white/[0.02] flex items-center gap-2">
                             <Mail size={16} className="text-blue-400" />
                             <span className="font-bold text-gray-300 text-xs uppercase tracking-widest">Active Cases</span>
@@ -1156,7 +1165,7 @@ function AdminContent() {
                     </div>
                     
                     {/* Case View */}
-                    <div className="flex-1 bg-[#0c0c0e] rounded-xl border border-white/5 flex flex-col shadow-xl overflow-hidden">
+                    <div className={`flex-1 bg-[#0c0c0e] rounded-xl border border-white/5 flex flex-col shadow-xl overflow-hidden ${activeSupportCase ? 'flex' : 'hidden md:flex'}`}>
                         {activeSupportCase ? (
                             <AdminSupportView activeCase={activeSupportCase} onClear={() => setActiveSupportCase(null)} />
                         ) : (
