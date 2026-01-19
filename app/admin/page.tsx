@@ -15,7 +15,7 @@ import {
   Users, MessageSquare, CheckCircle, Trash2, Search, LogOut, 
   Ban, Eye, X, Shield, ImageIcon, Terminal, Clock, 
   BarChart3, Download, Filter, AlertCircle, Activity, Copy, Archive, Loader2, ChevronDown,
-  Menu, ArrowLeft, Crown, Edit3, Save, Zap, Home, LifeBuoy, Mail, Check, Send, Ticket
+  Menu, ArrowLeft, Crown, Edit3, Save, Zap, Home, LifeBuoy, Mail, Check, Send, Ticket, XCircle
 } from 'lucide-react';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -102,8 +102,12 @@ const SupportCaseList = ({ onSelect, selectedId }: { onSelect: (item: any) => vo
                         <Ticket size={10} /> GUEST
                     </span>
                 ) : (
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${c.status === 'pending' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}>
-                        {c.status === 'pending' ? 'Pending' : 'Active'}
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                        c.status === 'pending' ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 
+                        c.status === 'resolved' ? 'bg-gray-500/10 text-gray-400 border border-gray-500/20' :
+                        'bg-green-500/10 text-green-400 border border-green-500/20'
+                    }`}>
+                        {c.status === 'pending' ? 'Pending' : c.status === 'resolved' ? 'Resolved' : 'Active'}
                     </span>
                 )}
             </div>
@@ -119,8 +123,8 @@ const SupportCaseList = ({ onSelect, selectedId }: { onSelect: (item: any) => vo
   );
 };
 
-// ✅ Updated to handle both Types
-const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
+// ✅ Updated to handle Mark Resolved & Manual Delete
+const AdminSupportView = ({ activeCase, onClear }: { activeCase: any, onClear: () => void }) => {
   // Common State
   const [data, setData] = useState<any>(null);
   
@@ -135,7 +139,12 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
     // 1. Listen to the Document (Ticket or Chat)
     const collectionName = activeCase.type === 'chat' ? 'support_chats' : 'support_tickets';
     const unsubDoc = onSnapshot(doc(db, collectionName, activeCase.id), (snap) => {
-       if (snap.exists()) setData(snap.data());
+       if (snap.exists()) {
+           setData(snap.data());
+       } else {
+           // Document might have been deleted
+           setData(null);
+       }
     });
     
     // 2. If it's a Chat, Listen to Messages
@@ -158,6 +167,38 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
     catch (e) { alert("Error approving request"); }
   };
 
+  const markResolved = async () => {
+    if(!confirm("Mark this case as resolved?")) return;
+    try {
+        const collectionName = activeCase.type === 'chat' ? 'support_chats' : 'support_tickets';
+        await updateDoc(doc(db, collectionName, activeCase.id), { status: 'resolved' });
+    } catch (e) { alert("Error updating status"); }
+  };
+
+  const deleteCase = async () => {
+      if(!confirm("⚠️ PERMANENTLY DELETE this case and all its data? This cannot be undone.")) return;
+      
+      try {
+          if (activeCase.type === 'chat') {
+              // Recursive delete for Chats: Delete messages subcollection first
+              const msgsSnap = await getDocs(collection(db, 'support_chats', activeCase.id, 'messages'));
+              const batch = writeBatch(db);
+              
+              msgsSnap.docs.forEach(d => batch.delete(d.ref));
+              batch.delete(doc(db, 'support_chats', activeCase.id));
+              
+              await batch.commit();
+          } else {
+              // Simple delete for Tickets
+              await deleteDoc(doc(db, 'support_tickets', activeCase.id));
+          }
+          onClear(); // Clear selection after delete
+      } catch (e) { 
+          console.error(e);
+          alert("Error deleting case"); 
+      }
+  };
+
   const sendChatReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if(!reply.trim()) return;
@@ -170,14 +211,6 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
     } catch (e) { console.error(e); }
   };
 
-  const resolveTicket = async () => {
-      if(!confirm("Mark this ticket as resolved and delete it?")) return;
-      try {
-          await deleteDoc(doc(db, 'support_tickets', activeCase.id));
-          // Note: Parent component should handle clearing selection if doc is deleted
-      } catch (e) { alert("Error resolving ticket"); }
-  };
-
   if(!data) return <div className="h-full flex items-center justify-center text-gray-500"><Loader2 className="animate-spin mr-2"/> Loading Case...</div>;
 
   // --- RENDER LOGIC ---
@@ -185,14 +218,17 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
   // 🅰️ GUEST TICKET VIEW
   if (activeCase.type === 'ticket') {
       return (
-        <div className="flex flex-col h-full bg-[#050505] p-8 items-center justify-center">
+        <div className="flex flex-col h-full bg-[#050505] p-8 items-center justify-center relative">
             <div className="max-w-lg w-full bg-[#0c0c0e] border border-white/10 rounded-2xl p-8 shadow-2xl">
                 <div className="flex items-center gap-4 mb-6 pb-6 border-b border-white/5">
                     <div className="w-12 h-12 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-400">
                         <Ticket size={24} />
                     </div>
                     <div>
-                        <h2 className="text-xl font-bold text-white">Guest Ticket</h2>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            Guest Ticket
+                            {data.status === 'resolved' && <span className="text-[10px] bg-gray-700 text-gray-300 px-2 py-0.5 rounded-full border border-gray-600">RESOLVED</span>}
+                        </h2>
                         <p className="text-sm text-gray-400 font-mono">{data.email}</p>
                     </div>
                 </div>
@@ -207,12 +243,19 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
                     </p>
                 </div>
 
-                <div className="flex gap-3">
-                    <a href={`mailto:${data.email}`} className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium text-sm transition-all flex items-center justify-center gap-2 border border-white/10">
+                <div className="grid grid-cols-2 gap-3">
+                    <a href={`mailto:${data.email}`} className="col-span-2 py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium text-sm transition-all flex items-center justify-center gap-2 border border-white/10">
                         <Mail size={16} /> Reply via Email
                     </a>
-                    <button onClick={resolveTicket} className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-green-900/20">
-                        Mark Resolved
+                    
+                    {data.status !== 'resolved' && (
+                        <button onClick={markResolved} className="py-3 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-900/20">
+                            <CheckCircle size={16} /> Mark Resolved
+                        </button>
+                    )}
+                    
+                    <button onClick={deleteCase} className={`py-3 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 border border-red-500/20 ${data.status === 'resolved' ? 'col-span-2' : ''}`}>
+                        <Trash2 size={16} /> Delete Ticket
                     </button>
                 </div>
             </div>
@@ -235,16 +278,36 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
                 {data.complaint}
              </div>
           </div>
-          <div className="shrink-0">
+          <div className="shrink-0 flex flex-col gap-2 items-end">
             {data.status === 'pending' ? (
                 <button onClick={approveChat} className="bg-green-600 hover:bg-green-500 text-white px-5 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-green-900/20 active:scale-95">
                     <Check size={14} /> Approve Request
                 </button>
             ) : (
-                <span className="text-green-400 text-xs font-bold border border-green-500/20 px-3 py-1.5 rounded-lg bg-green-900/10 flex items-center gap-2">
-                    <CheckCircle size={14} /> Chat Active
-                </span>
+                <div className="flex items-center gap-2">
+                    {data.status !== 'resolved' && (
+                        <button onClick={markResolved} className="bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all">
+                            <CheckCircle size={14} /> Resolve
+                        </button>
+                    )}
+                    <button onClick={deleteCase} className="bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all">
+                        <Trash2 size={14} /> Delete
+                    </button>
+                </div>
             )}
+            
+            <div className="mt-1">
+                {data.status === 'approved' && (
+                    <span className="text-green-400 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+                        <CheckCircle size={10} /> Active
+                    </span>
+                )}
+                {data.status === 'resolved' && (
+                    <span className="text-gray-500 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
+                        <CheckCircle size={10} /> Resolved
+                    </span>
+                )}
+            </div>
           </div>
        </div>
 
@@ -270,7 +333,7 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
        </div>
 
        {/* Input */}
-       {data.status === 'approved' && (
+       {data.status !== 'resolved' && data.status !== 'pending' && (
           <form onSubmit={sendChatReply} className="p-4 bg-[#0c0c0e] border-t border-white/5 flex gap-3 shrink-0">
              <input 
                 value={reply} 
@@ -282,6 +345,11 @@ const AdminSupportView = ({ activeCase }: { activeCase: any }) => {
                 <Send size={18} />
              </button>
           </form>
+       )}
+       {data.status === 'resolved' && (
+           <div className="p-4 bg-[#0c0c0e] border-t border-white/5 text-center text-xs text-gray-500">
+               This conversation has been resolved.
+           </div>
        )}
     </div>
   );
@@ -1090,7 +1158,7 @@ function AdminContent() {
                     {/* Case View */}
                     <div className="flex-1 bg-[#0c0c0e] rounded-xl border border-white/5 flex flex-col shadow-xl overflow-hidden">
                         {activeSupportCase ? (
-                            <AdminSupportView activeCase={activeSupportCase} />
+                            <AdminSupportView activeCase={activeSupportCase} onClear={() => setActiveSupportCase(null)} />
                         ) : (
                             <div className="flex h-full flex-col items-center justify-center text-gray-500 gap-4 opacity-50">
                                 <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">

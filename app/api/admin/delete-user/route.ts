@@ -20,10 +20,10 @@ export async function POST(req: NextRequest) {
 
     // 2. Recursive Delete Function (Subcollections)
     // Firestore doesn't delete subcollections automatically. We must do it manually.
+    const batch = adminDb.batch();
     
     // A. Delete 'sessions' for this user and their 'chats' subcollections
     const sessionsQuery = await adminDb.collection('sessions').where('userId', '==', uid).get();
-    const batch = adminDb.batch();
     
     for (const sessionDoc of sessionsQuery.docs) {
       // Delete chats within session
@@ -35,7 +35,20 @@ export async function POST(req: NextRequest) {
       batch.delete(sessionDoc.ref);
     }
 
-    // B. Delete User Document
+    // B. Delete 'support_chats' for this user (Channel + Messages)
+    // The support chat document ID is the same as the User ID
+    const supportRef = adminDb.collection('support_chats').doc(uid);
+    
+    // Fetch and delete all messages in the subcollection
+    const supportMsgsQuery = await supportRef.collection('messages').get();
+    supportMsgsQuery.docs.forEach(msgDoc => {
+      batch.delete(msgDoc.ref);
+    });
+    
+    // Delete the support chat document itself
+    batch.delete(supportRef);
+
+    // C. Delete User Document
     batch.delete(adminDb.collection('users').doc(uid));
 
     // Commit Firestore Changes

@@ -2,19 +2,18 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Send, AlertCircle, Clock, CheckCircle2, MessageSquare, Shield, Lock 
+  Send, AlertCircle, Clock, CheckCircle2, MessageSquare, Shield, Lock, RotateCcw, Plus 
 } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { 
   collection, addDoc, doc, setDoc, onSnapshot, serverTimestamp, 
-  query, orderBy, getDoc 
+  query, orderBy, updateDoc, deleteDoc, getDocs, writeBatch 
 } from 'firebase/firestore';
 
-// ✅ Fix: Added 'loading' to the type definition
-type SupportStatus = 'loading' | 'none' | 'pending' | 'approved';
+// ✅ Added 'resolved' to status types
+type SupportStatus = 'loading' | 'none' | 'pending' | 'approved' | 'resolved';
 
 export default function SupportInterface({ user }: { user: any }) {
-  // ✅ Fix: Removed 'as any' cast since 'loading' is now a valid type
   const [status, setStatus] = useState<SupportStatus>('loading');
   const [complaint, setComplaint] = useState('');
   const [messages, setMessages] = useState<any[]>([]);
@@ -74,7 +73,32 @@ export default function SupportInterface({ user }: { user: any }) {
       sender: 'user',
       createdAt: serverTimestamp()
     });
+    // Update lastUpdated so it bumps up in Admin list
+    await updateDoc(doc(db, 'support_chats', user.uid), { lastUpdated: serverTimestamp() });
     setInput('');
+  };
+
+  // 4. Action: Reopen Ticket
+  const reopenTicket = async () => {
+      await updateDoc(doc(db, 'support_chats', user.uid), { 
+          status: 'pending',
+          lastUpdated: serverTimestamp() 
+      });
+  };
+
+  // 5. Action: Close & Start New
+  const startNewTicket = async () => {
+      if(!confirm("This will clear your current chat history. Continue?")) return;
+      
+      const batch = writeBatch(db);
+      // Delete messages
+      const msgs = await getDocs(collection(db, 'support_chats', user.uid, 'messages'));
+      msgs.forEach(d => batch.delete(d.ref));
+      // Delete doc
+      batch.delete(doc(db, 'support_chats', user.uid));
+      
+      await batch.commit();
+      setComplaint('');
   };
 
   if (status === 'loading') return <div className="p-10 text-center text-gray-500">Loading support data...</div>;
@@ -133,7 +157,29 @@ export default function SupportInterface({ user }: { user: any }) {
         </div>
       )}
 
-      {/* STATE 3: APPROVED -> LIVE CHAT */}
+      {/* STATE 3: RESOLVED */}
+      {status === 'resolved' && (
+        <div className="flex-1 flex items-center justify-center">
+           <div className="text-center max-w-md p-8 bg-green-900/5 border border-green-500/20 rounded-2xl animate-in fade-in zoom-in">
+              <CheckCircle2 size={64} className="mx-auto text-green-500 mb-6" />
+              <h2 className="text-2xl font-bold text-white mb-2">Issue Resolved</h2>
+              <p className="text-gray-400 mb-8">
+                An administrator has marked this conversation as resolved. 
+                <br/>If you still need help, you can reopen this ticket or start a new one.
+              </p>
+              <div className="flex gap-3">
+                  <button onClick={startNewTicket} className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium text-sm transition-all border border-white/10 flex items-center justify-center gap-2">
+                      <Plus size={16} /> New Ticket
+                  </button>
+                  <button onClick={reopenTicket} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2">
+                      <RotateCcw size={16} /> Reopen
+                  </button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* STATE 4: APPROVED -> LIVE CHAT */}
       {status === 'approved' && (
         <div className="flex-1 bg-[#0c0c0e] border border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-2xl">
           {/* Chat Header */}
